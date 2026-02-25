@@ -1,0 +1,22 @@
+services:
+  audiobook-recap:
+    image: ghcr.io/tobiasredel/audiobook-recap:latest
+    build: .
+    container_name: audiobook-recap
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/data   # calibration data persists here
+    environment:
+      # --- REQUIRED ---
+      - AUDIOBOOKSHELF_URL=http://audiobookshelf:13378  # or your ABS LAN IP
+      - AUDIOBOOKSHELF_TOKEN=your-abs-api-token-here
+      - OPENAI_API_KEY=your-openai-api-key-here
+      # --- OPTIONAL ---
+      - LLM_MODEL=gpt-4o-mini
+      - SUMMARY_LANGUAGE=de
+      - DATA_DIR=/data
+    # If ABS runs in another docker network:
+    # networks:
+    #   - audiobookshelf_default
