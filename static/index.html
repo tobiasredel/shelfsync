@@ -149,17 +149,18 @@
 
     <!-- Calibration -->
     <div class="cal-panel" id="calPanel">
-        <div class="sl" style="margin-bottom:.8rem">⚙️ Kindle-Kalibrierung</div>
+        <div class="sl" style="margin-bottom:.8rem">Kindle-Kalibrierung</div>
         <div class="cal-tabs">
             <button class="cal-tab active" onclick="calTab(0)">Gesamtseitenzahl</button>
             <button class="cal-tab" onclick="calTab(1)">Aktuelle Seite</button>
+            <button class="cal-tab" onclick="calTab(2)">Kapitel-Offset</button>
         </div>
         <div class="cal-content active" id="calC0">
             <p class="cal-hint" style="margin-bottom:.8rem">Wie viele Seiten zeigt dein Kindle insgesamt für dieses Buch? (z.B. „Seite 42 <strong>von 320</strong>")</p>
             <div class="cal-row">
                 <input type="number" class="cal-input" id="calTotal" placeholder="320" min="1">
                 <span class="cal-hint">Seiten gesamt</span>
-                <button class="cal-btn" onclick="calByTotal()">Kalibrieren</button>
+                <button class="cal-btn" id="calTotalBtn" onclick="calByTotal()">Kalibrieren</button>
             </div>
         </div>
         <div class="cal-content" id="calC1">
@@ -167,7 +168,15 @@
             <div class="cal-row">
                 <span class="cal-hint">Ich bin auf Seite</span>
                 <input type="number" class="cal-input" id="calPage" placeholder="42" min="1">
-                <button class="cal-btn" onclick="calByPage()">Kalibrieren</button>
+                <button class="cal-btn" id="calPageBtn" onclick="calByPage()">Kalibrieren</button>
+            </div>
+        </div>
+        <div class="cal-content" id="calC2">
+            <p class="cal-hint" style="margin-bottom:.8rem">Wenn das EPUB Vorwort/Titelseiten hat, die im Hörbuch fehlen: Wie viele EPUB-Kapitel sollen übersprungen werden?</p>
+            <div class="cal-row">
+                <input type="number" class="cal-input" id="calOffset" placeholder="0" min="0" value="0">
+                <span class="cal-hint">Kapitel überspringen (<span id="calOffsetMax">?</span> verfügbar)</span>
+                <button class="cal-btn" id="calOffsetBtn" onclick="calSetOffset()">Setzen</button>
             </div>
         </div>
         <div class="cal-row" style="margin-top:.8rem">
@@ -302,38 +311,65 @@ async function loadPos(){
 async function loadCal(){
     if(!sel)return;
     try{
-        const d=await(await fetch(`/api/calibration/${sel.id}`)).json();
+        const r=await fetch(`/api/calibration/${sel.id}`);
+        if(!r.ok)throw new Error('Kalibrierung konnte nicht geladen werden');
+        const d=await r.json();
         $('#calReset').style.display=d.is_calibrated?'':'none';
+        $('#calOffset').value=d.epub_chapter_offset||0;
+        $('#calOffsetMax').textContent=d.epub_chapter_count||'?';
         $('#calPanel').classList.add('visible');
-    }catch(e){$('#calPanel').classList.remove('visible')}
+    }catch(e){$('#calPanel').classList.remove('visible');showCal('✗ '+e.message)}
 }
 
 function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i))}
 
 async function calByTotal(){
     const v=parseInt($('#calTotal').value);if(!v||!sel)return;
+    const btn=$('#calTotalBtn');btn.disabled=true;btn.textContent='…';
     try{
-        const d=await(await fetch('/api/calibrate/by-total',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:sel.id,total_kindle_pages:v})})).json();
+        const r=await fetch('/api/calibrate/by-total',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_item_id:sel.id,total_kindle_pages:v})});
+        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
+        const d=await r.json();
         showCal(`✓ Kalibriert: ${d.words_per_page} Wörter/Seite → ${d.total_pages} Seiten`);
         loadPos();$('#calReset').style.display='';
     }catch(e){showCal('✗ Fehler: '+e.message)}
+    finally{btn.disabled=false;btn.textContent='Kalibrieren'}
 }
 
 async function calByPage(){
     const v=parseInt($('#calPage').value);if(!v||!sel)return;
+    const btn=$('#calPageBtn');btn.disabled=true;btn.textContent='…';
     try{
-        const d=await(await fetch('/api/calibrate/by-page',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:sel.id,kindle_page:v,audio_time_seconds:sel.current_time})})).json();
+        const r=await fetch('/api/calibrate/by-page',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_item_id:sel.id,kindle_page:v,audio_time_seconds:sel.current_time})});
+        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
+        const d=await r.json();
         showCal(`✓ Kalibriert: ${d.words_per_page} Wörter/Seite → ${d.total_pages} Seiten`);
         loadPos();$('#calReset').style.display='';
     }catch(e){showCal('✗ Fehler: '+e.message)}
+    finally{btn.disabled=false;btn.textContent='Kalibrieren'}
+}
+
+async function calSetOffset(){
+    const v=parseInt($('#calOffset').value);if(isNaN(v)||v<0||!sel)return;
+    const btn=$('#calOffsetBtn');btn.disabled=true;btn.textContent='…';
+    try{
+        const r=await fetch('/api/calibrate/offset',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_item_id:sel.id,epub_chapter_offset:v})});
+        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
+        showCal(`✓ Offset: ${v} Kapitel übersprungen`);
+        loadPos();
+    }catch(e){showCal('✗ Fehler: '+e.message)}
+    finally{btn.disabled=false;btn.textContent='Setzen'}
 }
 
 async function calReset(){
     if(!sel)return;
-    await fetch(`/api/calibration/${sel.id}`,{method:'DELETE'});
-    showCal('Kalibrierung zurückgesetzt');loadPos();$('#calReset').style.display='none';
+    const r=await fetch(`/api/calibration/${sel.id}`,{method:'DELETE'});
+    if(!r.ok){showCal('✗ Zurücksetzen fehlgeschlagen');return}
+    showCal('Kalibrierung zurückgesetzt');$('#calOffset').value=0;
+    loadPos();$('#calReset').style.display='none';
 }
 
 function showCal(msg){$('#calRes').textContent=msg;$('#calRes').classList.add('visible');setTimeout(()=>$('#calRes').classList.remove('visible'),5000)}

@@ -2,22 +2,29 @@
 Audiobook Recap v4 – Recap + Position Sync + Dynamic Calibration
 """
 
-import os
+import asyncio
+import base64
+import html as html_mod
 import io
-import re
 import json
 import logging
+import os
+import re
+import secrets
+import threading
 import zipfile
+from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 from xml.etree import ElementTree
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from pydantic import BaseModel
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 # ---------------------------------------------------------------------------
 # Config
@@ -29,36 +36,85 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 SUMMARY_LANGUAGE = os.getenv("SUMMARY_LANGUAGE", "de")
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DEFAULT_WORDS_PER_PAGE = 250
+EPUB_MAX_SIZE_MB = int(os.getenv("EPUB_MAX_SIZE_MB", "100"))
+AUTH_USER = os.getenv("AUTH_USER", "")
+AUTH_PASS = os.getenv("AUTH_PASS", "")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("audiobook-recap")
 
-app = FastAPI(title="Audiobook Recap", version="4.0.0")
+
+# ---------------------------------------------------------------------------
+# Auth (optional – set AUTH_USER + AUTH_PASS env vars to enable)
+# ---------------------------------------------------------------------------
+async def verify_auth(request: Request):
+    if not AUTH_USER:
+        return
+    # Allow health check without auth
+    if request.url.path == "/api/health":
+        return
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth[6:]).decode("utf-8")
+            user, _, password = decoded.partition(":")
+            if (secrets.compare_digest(user, AUTH_USER)
+                    and secrets.compare_digest(password, AUTH_PASS)):
+                return
+        except Exception:
+            pass
+    raise HTTPException(
+        status_code=401, detail="Unauthorized",
+        headers={"WWW-Authenticate": 'Basic realm="Audiobook Recap"'})
+
+
+# ---------------------------------------------------------------------------
+# Shared HTTP client (lifespan)
+# ---------------------------------------------------------------------------
+_http_client: httpx.AsyncClient | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _http_client
+    _http_client = httpx.AsyncClient(timeout=30)
+    yield
+    await _http_client.aclose()
+    _http_client = None
+
+
+app = FastAPI(title="Audiobook Recap", version="4.1.0",
+              lifespan=lifespan, dependencies=[Depends(verify_auth)])
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-_epub_cache: dict[str, list[dict]] = {}
+_epub_cache: OrderedDict[str, list[dict]] = OrderedDict()
 
 
 # ---------------------------------------------------------------------------
-# Calibration persistence
+# Calibration persistence (thread-safe)
 # ---------------------------------------------------------------------------
+_calibration_lock = threading.Lock()
+
+
 def _calibration_path() -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     return DATA_DIR / "calibration.json"
 
 
 def load_calibrations() -> dict:
-    p = _calibration_path()
-    if p.exists():
-        try:
-            return json.loads(p.read_text())
-        except Exception:
-            return {}
-    return {}
+    with _calibration_lock:
+        p = _calibration_path()
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                return {}
+        return {}
 
 
 def save_calibrations(data: dict):
-    _calibration_path().write_text(json.dumps(data, indent=2))
+    with _calibration_lock:
+        _calibration_path().write_text(json.dumps(data, indent=2))
 
 
 def get_words_per_page(item_id: str) -> Optional[float]:
@@ -69,14 +125,46 @@ def get_words_per_page(item_id: str) -> Optional[float]:
     return None
 
 
-def set_calibration(item_id: str, words_per_page: float, method: str, details: dict = None):
+def get_chapter_offset(item_id: str) -> int:
     cal = load_calibrations()
-    cal[item_id] = {
-        "words_per_page": round(words_per_page, 1),
-        "method": method,
-        **(details or {}),
-    }
-    save_calibrations(cal)
+    entry = cal.get(item_id)
+    if entry:
+        return entry.get("epub_chapter_offset", 0)
+    return 0
+
+
+def set_calibration(item_id: str, words_per_page: float, method: str, details: dict = None):
+    with _calibration_lock:
+        cal_path = _calibration_path()
+        cal = {}
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+        existing = cal.get(item_id, {})
+        existing.update({
+            "words_per_page": round(words_per_page, 1),
+            "method": method,
+            **(details or {}),
+        })
+        cal[item_id] = existing
+        cal_path.write_text(json.dumps(cal, indent=2))
+
+
+def set_chapter_offset(item_id: str, offset: int):
+    with _calibration_lock:
+        cal_path = _calibration_path()
+        cal = {}
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+        existing = cal.get(item_id, {})
+        existing["epub_chapter_offset"] = max(0, offset)
+        cal[item_id] = existing
+        cal_path.write_text(json.dumps(cal, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +245,11 @@ class PageToAudioResponse(BaseModel):
     nearby_text: str
 
 
+class SetOffsetRequest(BaseModel):
+    library_item_id: str
+    epub_chapter_offset: int
+
+
 # ---------------------------------------------------------------------------
 # EPUB extraction (unchanged)
 # ---------------------------------------------------------------------------
@@ -212,10 +305,7 @@ def _strip_html(html_bytes: bytes) -> str:
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
-    for ent, ch in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"),
-                     ("&gt;", ">"), ("&quot;", '"'), ("&apos;", "'")]:
-        text = text.replace(ent, ch)
-    text = re.sub(r"&#\d+;", "", text)
+    text = html_mod.unescape(text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
@@ -232,17 +322,24 @@ def _extract_heading(html_bytes: bytes) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Mapping helpers
+# Mapping helpers (with front-matter offset support)
 # ---------------------------------------------------------------------------
-def _build_full_text(ec): return " ".join(ch["text"] for ch in ec)
+_full_text_cache: dict[str, str] = {}
+
+
+def _build_full_text(ec, item_id: str | None = None) -> str:
+    if item_id and item_id in _full_text_cache:
+        return _full_text_cache[item_id]
+    ft = " ".join(ch["text"] for ch in ec)
+    if item_id:
+        _full_text_cache[item_id] = ft
+    return ft
+
+
 def _total_words(ec): return sum(ch["word_count"] for ch in ec)
 
-def _total_pages(epub_chapters: list[dict], item_id: str) -> int:
-    wpp = get_words_per_page(item_id) or DEFAULT_WORDS_PER_PAGE
-    return max(1, round(_total_words(epub_chapters) / wpp))
 
-
-def _time_to_char_position(audio_ch, epub_ch, time_sec, total_dur):
+def _time_to_char_position(audio_ch, epub_ch, time_sec, total_dur, offset: int = 0):
     full_text = _build_full_text(epub_ch)
     if not audio_ch:
         ratio = time_sec / max(total_dur, 1)
@@ -256,16 +353,18 @@ def _time_to_char_position(audio_ch, epub_ch, time_sec, total_dur):
     cs, ce = cur["start"], cur.get("end", cur["start"])
     cd = ce - cs
     cp = max(0, min(1, (time_sec - cs) / max(cd, 1)))
+    # Map audio chapter ci → EPUB chapter ci + offset
+    epub_idx = ci + offset
     co = 0
     for i, e in enumerate(epub_ch):
-        if i < ci:
+        if i < epub_idx:
             co += e["char_count"] + 1
-        elif i == ci:
+        elif i == epub_idx:
             co += int(e["char_count"] * cp); break
     return min(co, len(full_text) - 1), cur.get("title", ""), cp * 100
 
 
-def _char_position_to_time(audio_ch, epub_ch, char_pos, total_dur):
+def _char_position_to_time(audio_ch, epub_ch, char_pos, total_dur, offset: int = 0):
     if not audio_ch or not epub_ch:
         full = _build_full_text(epub_ch)
         return (char_pos / max(len(full), 1)) * total_dur, "(geschätzt)"
@@ -274,7 +373,8 @@ def _char_position_to_time(audio_ch, epub_ch, char_pos, total_dur):
         if cum + e["char_count"] >= char_pos:
             ti, ep = i, (char_pos - cum) / max(e["char_count"], 1); break
         cum += e["char_count"] + 1; ti, ep = i, 1.0
-    ai = min(ti, len(audio_ch) - 1)
+    # EPUB chapter ti → audio chapter ti - offset
+    ai = min(max(0, ti - offset), len(audio_ch) - 1)
     a = audio_ch[ai]
     return a["start"] + (a.get("end", a["start"]) - a["start"]) * ep, a.get("title", "")
 
@@ -284,7 +384,7 @@ def _format_time(s):
     return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 
-def map_time_to_text(audio_ch, epub_ch, start_sec, end_sec):
+def map_time_to_text(audio_ch, epub_ch, start_sec, end_sec, offset: int = 0):
     if not epub_ch:
         raise ValueError("No EPUB chapters")
     if not audio_ch:
@@ -294,7 +394,9 @@ def map_time_to_text(audio_ch, epub_ch, start_sec, end_sec):
         cs, ce = a.get("start", 0), a.get("end", 0)
         if cs >= end_sec or ce <= start_sec:
             continue
-        e = epub_ch[i] if i < len(epub_ch) else None
+        # Apply front-matter offset: audio chapter i → EPUB chapter i + offset
+        ei = i + offset
+        e = epub_ch[ei] if ei < len(epub_ch) else None
         if not e:
             at = a.get("title", "").lower()
             for ec in epub_ch:
@@ -334,44 +436,90 @@ def _pfb(ec, ss, es, td):
 
 
 # ---------------------------------------------------------------------------
-# ABS API
+# ABS API (shared client, status checks, size limits)
 # ---------------------------------------------------------------------------
 def abs_headers():
     return {"Authorization": f"Bearer {ABS_TOKEN}"}
 
 
+def _client() -> httpx.AsyncClient:
+    if _http_client is None:
+        raise RuntimeError("HTTP client not initialized (app not started?)")
+    return _http_client
+
+
 async def get_library_items():
-    async with httpx.AsyncClient(timeout=30) as c:
-        libs = (await c.get(f"{ABS_URL}/api/libraries", headers=abs_headers())).json().get("libraries", [])
-        items = []
-        for lib in libs:
-            r = await c.get(f"{ABS_URL}/api/libraries/{lib['id']}/items", headers=abs_headers(),
-                            params={"limit": 100, "sort": "media.metadata.title"})
-            for item in r.json().get("results", []):
-                media = item.get("media", {}); md = media.get("metadata", {})
-                prog = item.get("userMediaProgress") or {}
-                ef = media.get("ebookFile")
-                cal = load_calibrations().get(item["id"])
-                items.append({
-                    "id": item["id"], "title": md.get("title", "Unknown"),
-                    "author": md.get("authorName", "Unknown"),
-                    "duration": media.get("duration", 0),
-                    "current_time": prog.get("currentTime", 0),
-                    "cover": f"{ABS_URL}/api/items/{item['id']}/cover?token={ABS_TOKEN}",
-                    "has_epub": bool(ef and ef.get("metadata", {}).get("ext", "") == ".epub"),
-                    "is_calibrated": cal is not None,
-                })
-        return items
+    c = _client()
+    r = await c.get(f"{ABS_URL}/api/libraries", headers=abs_headers())
+    r.raise_for_status()
+    libs = r.json().get("libraries", [])
+    items = []
+    cal_data = load_calibrations()
+    for lib in libs:
+        r2 = await c.get(f"{ABS_URL}/api/libraries/{lib['id']}/items", headers=abs_headers(),
+                         params={"limit": 100, "sort": "media.metadata.title"})
+        r2.raise_for_status()
+        for item in r2.json().get("results", []):
+            media = item.get("media", {}); md = media.get("metadata", {})
+            prog = item.get("userMediaProgress") or {}
+            ef = media.get("ebookFile")
+            cal = cal_data.get(item["id"])
+            items.append({
+                "id": item["id"], "title": md.get("title", "Unknown"),
+                "author": md.get("authorName", "Unknown"),
+                "duration": media.get("duration", 0),
+                "current_time": prog.get("currentTime", 0),
+                "cover": f"/api/cover/{item['id']}",
+                "has_epub": bool(ef and ef.get("metadata", {}).get("ext", "") == ".epub"),
+                "is_calibrated": cal is not None,
+            })
+    return items
 
 
 async def get_item_details(item_id):
-    async with httpx.AsyncClient(timeout=30) as c:
-        return (await c.get(f"{ABS_URL}/api/items/{item_id}", headers=abs_headers())).json()
+    c = _client()
+    r = await c.get(f"{ABS_URL}/api/items/{item_id}", headers=abs_headers())
+    r.raise_for_status()
+    return r.json()
 
 
 async def download_epub(item_id, ino):
-    async with httpx.AsyncClient(timeout=120) as c:
-        return (await c.get(f"{ABS_URL}/api/items/{item_id}/file/{ino}/download", headers=abs_headers())).content
+    c = _client()
+    r = await c.get(f"{ABS_URL}/api/items/{item_id}/file/{ino}/download",
+                    headers=abs_headers(), timeout=120)
+    r.raise_for_status()
+    max_bytes = EPUB_MAX_SIZE_MB * 1024 * 1024
+    if len(r.content) > max_bytes:
+        raise HTTPException(status_code=413,
+                            detail=f"EPUB zu groß ({len(r.content) // 1024 // 1024} MB, max {EPUB_MAX_SIZE_MB} MB)")
+    return r.content
+
+
+# ---------------------------------------------------------------------------
+# EPUB cache (LRU in-memory + disk persistence)
+# ---------------------------------------------------------------------------
+def _epub_disk_cache_dir() -> Path:
+    d = DATA_DIR / "epub_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _load_cached_epub_from_disk(item_id: str) -> list[dict] | None:
+    p = _epub_disk_cache_dir() / f"{item_id}.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            return None
+    return None
+
+
+def _save_cached_epub_to_disk(item_id: str, chapters: list[dict]):
+    try:
+        p = _epub_disk_cache_dir() / f"{item_id}.json"
+        p.write_text(json.dumps(chapters, ensure_ascii=False))
+    except Exception as e:
+        logger.warning("EPUB-Cache konnte nicht auf Disk geschrieben werden: %s", e)
 
 
 async def get_epub_chapters(item_id):
@@ -383,25 +531,34 @@ async def get_epub_chapters(item_id):
     ef = media.get("ebookFile")
     if not ef or ef.get("metadata", {}).get("ext", "") != ".epub":
         raise HTTPException(status_code=400, detail="Kein EPUB gefunden.")
+    # 1. LRU in-memory cache
     if item_id in _epub_cache:
+        _epub_cache.move_to_end(item_id)
         ec = _epub_cache[item_id]
     else:
-        eb = await download_epub(item_id, ef.get("ino", ""))
-        ec = extract_text_from_epub(eb)
+        # 2. Disk cache
+        ec = _load_cached_epub_from_disk(item_id)
         if not ec:
-            raise HTTPException(status_code=500, detail="EPUB-Text konnte nicht extrahiert werden")
+            # 3. Download + parse
+            eb = await download_epub(item_id, ef.get("ino", ""))
+            ec = extract_text_from_epub(eb)
+            if not ec:
+                raise HTTPException(status_code=500, detail="EPUB-Text konnte nicht extrahiert werden")
+            _save_cached_epub_to_disk(item_id, ec)
         _epub_cache[item_id] = ec
         if len(_epub_cache) > 20:
-            del _epub_cache[next(iter(_epub_cache))]
+            evicted_id, _ = _epub_cache.popitem(last=False)
+            _full_text_cache.pop(evicted_id, None)
     return ec, audio_ch, duration
 
 
 async def update_abs_progress(item_id, time_sec, duration):
-    async with httpx.AsyncClient(timeout=15) as c:
-        await c.patch(f"{ABS_URL}/api/me/progress/{item_id}",
+    c = _client()
+    r = await c.patch(f"{ABS_URL}/api/me/progress/{item_id}",
                       headers={**abs_headers(), "Content-Type": "application/json"},
                       json={"currentTime": time_sec, "duration": duration,
                             "progress": time_sec / max(duration, 1), "isFinished": False})
+    r.raise_for_status()
 
 
 # ---------------------------------------------------------------------------
@@ -453,13 +610,30 @@ def _split_into_chunks(text: str, max_chars: int | None = None) -> list[str]:
     return chunks
 
 
-def _call_llm(client: OpenAI, messages: list[dict], max_tokens: int = 1000) -> str:
-    r = client.chat.completions.create(
-        model=LLM_MODEL, temperature=0.3, max_tokens=max_tokens, messages=messages)
-    return r.choices[0].message.content
+_LLM_MAX_RETRIES = 2
+_LLM_RETRY_DELAY = 2  # seconds
 
 
-def summarize_text(text: str, style: str, language: str = "de") -> str:
+async def _call_llm(client: AsyncOpenAI, messages: list[dict], max_tokens: int = 1000) -> str:
+    """Call LLM with retry on transient errors. Returns empty string on None content."""
+    last_err = None
+    for attempt in range(_LLM_MAX_RETRIES + 1):
+        try:
+            r = await client.chat.completions.create(
+                model=LLM_MODEL, temperature=0.3, max_tokens=max_tokens, messages=messages)
+            return r.choices[0].message.content or ""
+        except Exception as e:
+            last_err = e
+            if attempt < _LLM_MAX_RETRIES:
+                delay = _LLM_RETRY_DELAY * (2 ** attempt)
+                logger.warning("LLM-Aufruf fehlgeschlagen (Versuch %d/%d): %s – Retry in %ds",
+                               attempt + 1, _LLM_MAX_RETRIES + 1, e, delay)
+                await asyncio.sleep(delay)
+    raise HTTPException(status_code=502,
+                        detail=f"LLM nicht erreichbar nach {_LLM_MAX_RETRIES + 1} Versuchen: {last_err}")
+
+
+async def summarize_text(text: str, style: str, language: str = "de") -> str:
     styles = {"concise": "3-5 Sätze, Fokus Handlung.",
               "detailed": "Ausführlich: Ereignisse, Dialoge, Charaktere.",
               "bullet": "Aufzählung der Schlüsselereignisse."}
@@ -467,28 +641,30 @@ def summarize_text(text: str, style: str, language: str = "de") -> str:
     system_msg = (f"Du fasst Hörbuch-Abschnitte zusammen. Nutzer ist eingeschlafen.\n"
                   f"{styles.get(style, styles['concise'])}\n{lang}\nKeine Spoiler.")
 
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
     chunks = _split_into_chunks(text)
 
     if len(chunks) == 1:
-        return _call_llm(client, [
+        return await _call_llm(client, [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": f"Hörbuch-Abschnitt:\n\n{chunks[0]}"}])
 
-    # Summarize each chunk individually
+    # Summarize chunks in parallel
     logger.info("Text hat %d Zeichen – wird in %d Teile aufgeteilt", len(text), len(chunks))
-    partial_summaries: list[str] = []
-    for i, chunk in enumerate(chunks, 1):
+
+    async def _summarize_chunk(i: int, chunk: str) -> str:
         logger.info("Zusammenfassung Teil %d/%d …", i, len(chunks))
-        part = _call_llm(client, [
+        return await _call_llm(client, [
             {"role": "system", "content": system_msg},
             {"role": "user", "content": f"Hörbuch-Abschnitt (Teil {i} von {len(chunks)}):\n\n{chunk}"}])
-        partial_summaries.append(part)
+
+    partial_summaries = await asyncio.gather(
+        *(_summarize_chunk(i, chunk) for i, chunk in enumerate(chunks, 1)))
 
     # Merge partial summaries into one coherent summary
     merged_input = "\n\n---\n\n".join(
         f"Teil {i}: {s}" for i, s in enumerate(partial_summaries, 1))
-    return _call_llm(client, [
+    return await _call_llm(client, [
         {"role": "system", "content": system_msg},
         {"role": "user", "content": (
             f"Die folgenden Teilzusammenfassungen stammen aus einem zusammenhängenden "
@@ -507,7 +683,7 @@ async def index():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "4.0.0"}
+    return {"status": "ok", "version": "4.1.0"}
 
 @app.get("/api/books")
 async def list_books():
@@ -522,6 +698,19 @@ async def get_chapters(item_id):
     return {"chapters": item.get("media", {}).get("chapters", [])}
 
 
+# --- Cover proxy (avoids leaking ABS token to browser) ---
+@app.get("/api/cover/{item_id}")
+async def cover_proxy(item_id: str):
+    try:
+        c = _client()
+        r = await c.get(f"{ABS_URL}/api/items/{item_id}/cover", headers=abs_headers())
+        r.raise_for_status()
+        ct = r.headers.get("content-type", "image/jpeg")
+        return Response(content=r.content, media_type=ct)
+    except Exception:
+        return Response(status_code=404)
+
+
 # --- Calibration ---
 @app.get("/api/calibration/{item_id}")
 async def get_calibration(item_id: str):
@@ -530,6 +719,7 @@ async def get_calibration(item_id: str):
     ec, _, _ = await get_epub_chapters(item_id)
     tw = _total_words(ec)
     wpp = cal["words_per_page"] if cal else DEFAULT_WORDS_PER_PAGE
+    offset = cal.get("epub_chapter_offset", 0) if cal else 0
     return {
         "is_calibrated": cal is not None,
         "words_per_page": wpp,
@@ -537,6 +727,8 @@ async def get_calibration(item_id: str):
         "total_pages": max(1, round(tw / wpp)),
         "method": cal.get("method", "default") if cal else "default",
         "default_words_per_page": DEFAULT_WORDS_PER_PAGE,
+        "epub_chapter_offset": offset,
+        "epub_chapter_count": len(ec),
     }
 
 
@@ -545,17 +737,16 @@ async def calibrate_by_page(req: CalibrateByPageRequest):
     """Calibrate by: 'I'm on Kindle page X and audio is at Y seconds'."""
     ec, audio_ch, duration = await get_epub_chapters(req.library_item_id)
     tw = _total_words(ec)
+    offset = get_chapter_offset(req.library_item_id)
 
-    # Find how many words correspond to the audio position
-    char_pos, _, _ = _time_to_char_position(audio_ch, ec, req.audio_time_seconds, duration)
-    full = _build_full_text(ec)
+    char_pos, _, _ = _time_to_char_position(audio_ch, ec, req.audio_time_seconds, duration, offset)
+    full = _build_full_text(ec, req.library_item_id)
     words_at_pos = len(full[:char_pos].split())
 
-    # words_per_page = words_at_position / kindle_page
     if req.kindle_page <= 0:
         raise HTTPException(status_code=400, detail="Seitenzahl muss > 0 sein")
     wpp = words_at_pos / req.kindle_page
-    wpp = max(50, min(600, wpp))  # sanity bounds
+    wpp = max(50, min(600, wpp))
 
     set_calibration(req.library_item_id, wpp, "by_page",
                     {"kindle_page": req.kindle_page, "audio_seconds": req.audio_time_seconds})
@@ -588,11 +779,24 @@ async def calibrate_by_total(req: CalibrateByTotalRequest):
     )
 
 
+@app.post("/api/calibrate/offset")
+async def set_offset(req: SetOffsetRequest):
+    """Set the EPUB front-matter chapter offset."""
+    ec, _, _ = await get_epub_chapters(req.library_item_id)
+    if req.epub_chapter_offset < 0 or req.epub_chapter_offset >= len(ec):
+        raise HTTPException(status_code=400,
+                            detail=f"Offset muss zwischen 0 und {len(ec) - 1} liegen")
+    set_chapter_offset(req.library_item_id, req.epub_chapter_offset)
+    return {"status": "ok", "epub_chapter_offset": req.epub_chapter_offset,
+            "epub_chapter_count": len(ec)}
+
+
 @app.delete("/api/calibration/{item_id}")
 async def reset_calibration(item_id: str):
     cal = load_calibrations()
     cal.pop(item_id, None)
     save_calibrations(cal)
+    _full_text_cache.pop(item_id, None)
     return {"status": "reset"}
 
 
@@ -600,11 +804,12 @@ async def reset_calibration(item_id: str):
 @app.post("/api/position", response_model=PositionResponse)
 async def get_position(req: PositionRequest):
     ec, ac, dur = await get_epub_chapters(req.library_item_id)
-    full = _build_full_text(ec)
+    full = _build_full_text(ec, req.library_item_id)
     wpp = get_words_per_page(req.library_item_id) or DEFAULT_WORDS_PER_PAGE
     tp = max(1, round(_total_words(ec) / wpp))
     tw = _total_words(ec)
-    cp, ct, cpct = _time_to_char_position(ac, ec, req.current_time_seconds, dur)
+    offset = get_chapter_offset(req.library_item_id)
+    cp, ct, cpct = _time_to_char_position(ac, ec, req.current_time_seconds, dur, offset)
     wb = len(full[:cp].split())
     page = max(1, min(tp, round(wb / wpp) + 1))
     pct = round(wb / max(tw, 1) * 100, 1)
@@ -631,19 +836,16 @@ async def create_recap(req: RecapRequest):
     if d <= 0: raise HTTPException(status_code=400, detail="End > Start")
     if d > 7200: raise HTTPException(status_code=400, detail="Max 120 min")
     ec, ac, _ = await get_epub_chapters(req.library_item_id)
-    text, names = map_time_to_text(ac, ec, ss, es)
+    offset = get_chapter_offset(req.library_item_id)
+    text, names = map_time_to_text(ac, ec, ss, es, offset)
     if not text or len(text.strip()) < 10:
         raise HTTPException(status_code=400, detail="Kein Text gefunden")
-    summary = summarize_text(text, req.summary_style, SUMMARY_LANGUAGE)
+    summary = await summarize_text(text, req.summary_style, SUMMARY_LANGUAGE)
     n_chunks = len(_split_into_chunks(text))
-    # Cost estimate: each chunk is sent as input, each produces output;
-    # if >1 chunk an extra merge call processes the partial summaries.
-    ti = len(text.split()) * 1.3  # total input tokens (all chunks)
+    ti = len(text.split()) * 1.3
     to = len(summary.split()) * 1.3
     if n_chunks > 1:
-        # partial summaries (~200 words each) become input for the merge step
         ti += n_chunks * 200 * 1.3
-        # partial summary outputs
         to += n_chunks * 200 * 1.3
     cost = (ti * 0.00015 + to * 0.0006) / 1000
     return RecapResponse(text_excerpt=text[:5000] + ("…" if len(text) > 5000 else ""),
@@ -655,7 +857,8 @@ async def create_recap(req: RecapRequest):
 @app.post("/api/find-text", response_model=TextSearchResponse)
 async def find_text(req: TextSearchRequest):
     ec, ac, dur = await get_epub_chapters(req.library_item_id)
-    full = _build_full_text(ec)
+    full = _build_full_text(ec, req.library_item_id)
+    offset = get_chapter_offset(req.library_item_id)
     q = req.query.strip()
     if len(q) < 3: raise HTTPException(status_code=400, detail="Min 3 Zeichen")
     idx = full.lower().find(q.lower())
@@ -672,7 +875,7 @@ async def find_text(req: TextSearchRequest):
             if bi != -1: break
         if bi != -1: idx, conf = bi, "approximate"
         else: raise HTTPException(status_code=404, detail="Text nicht gefunden")
-    ts, ct = _char_position_to_time(ac, ec, idx, dur)
+    ts, ct = _char_position_to_time(ac, ec, idx, dur, offset)
     cs, ce = max(0, idx - 80), min(len(full), idx + len(q) + 80)
     return TextSearchResponse(audio_timestamp_seconds=round(ts, 1),
                               audio_timestamp_formatted=_format_time(ts),
@@ -683,7 +886,8 @@ async def find_text(req: TextSearchRequest):
 @app.post("/api/page-to-audio", response_model=PageToAudioResponse)
 async def page_to_audio(req: PageToAudioRequest):
     ec, ac, dur = await get_epub_chapters(req.library_item_id)
-    full = _build_full_text(ec)
+    full = _build_full_text(ec, req.library_item_id)
+    offset = get_chapter_offset(req.library_item_id)
     wpp = get_words_per_page(req.library_item_id) or DEFAULT_WORDS_PER_PAGE
     tp = max(1, round(_total_words(ec) / wpp))
     if req.page_number < 1 or req.page_number > tp:
@@ -694,7 +898,7 @@ async def page_to_audio(req: PageToAudioRequest):
         if ch == ' ': wc += 1
         if wc >= wt: cp = i; break
     else: cp = len(full) - 1
-    ts, ct = _char_position_to_time(ac, ec, cp, dur)
+    ts, ct = _char_position_to_time(ac, ec, cp, dur, offset)
     s, e = max(0, cp - 60), min(len(full), cp + 60)
     return PageToAudioResponse(audio_timestamp_seconds=round(ts, 1),
                                audio_timestamp_formatted=_format_time(ts),
