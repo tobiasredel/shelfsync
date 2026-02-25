@@ -407,20 +407,95 @@ async def update_abs_progress(item_id, time_sec, duration):
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
-def summarize_text(text, style, language="de"):
+# Known context window sizes (tokens) for common models.
+# Conservative defaults – we only use ~80% of the window for input to leave
+# headroom for the system prompt, output tokens, and tokenizer variance.
+_MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+    "gpt-4o": 128000,
+    "gpt-4o-mini": 128000,
+    "gpt-4-turbo": 128000,
+    "gpt-4": 8192,
+    "gpt-3.5-turbo": 16384,
+    "gpt-3.5-turbo-16k": 16384,
+}
+_DEFAULT_CONTEXT_WINDOW = 16384  # safe fallback for unknown models
+_CHARS_PER_TOKEN = 3  # conservative estimate (German text ≈ 3 chars/token)
+_CONTEXT_USAGE_RATIO = 0.75  # use at most 75% of context for the text chunk
+_SYSTEM_PROMPT_TOKENS = 200  # rough reservation for system + framing
+
+
+def _max_chunk_chars() -> int:
+    """Derive the maximum chunk size in characters from the configured model."""
+    ctx = _MODEL_CONTEXT_WINDOWS.get(LLM_MODEL, _DEFAULT_CONTEXT_WINDOW)
+    usable_tokens = int(ctx * _CONTEXT_USAGE_RATIO) - _SYSTEM_PROMPT_TOKENS
+    return max(4000, usable_tokens * _CHARS_PER_TOKEN)
+
+
+def _split_into_chunks(text: str, max_chars: int | None = None) -> list[str]:
+    """Split text into chunks of at most *max_chars*, breaking at word boundaries."""
+    if max_chars is None:
+        max_chars = _max_chunk_chars()
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = start + max_chars
+        if end >= len(text):
+            chunks.append(text[start:])
+            break
+        # find last space before the limit so we don't split mid-word
+        idx = text.rfind(" ", start, end)
+        if idx <= start:
+            idx = end  # no space found – hard break (unlikely for prose)
+        chunks.append(text[start:idx])
+        start = idx + 1  # skip the space
+    return chunks
+
+
+def _call_llm(client: OpenAI, messages: list[dict], max_tokens: int = 1000) -> str:
+    r = client.chat.completions.create(
+        model=LLM_MODEL, temperature=0.3, max_tokens=max_tokens, messages=messages)
+    return r.choices[0].message.content
+
+
+def summarize_text(text: str, style: str, language: str = "de") -> str:
     styles = {"concise": "3-5 Sätze, Fokus Handlung.",
               "detailed": "Ausführlich: Ereignisse, Dialoge, Charaktere.",
               "bullet": "Aufzählung der Schlüsselereignisse."}
     lang = "Antworte auf Deutsch." if language == "de" else ("Answer in English." if language == "en" else "")
-    if len(text) > 24000:
-        text = text[:24000] + "\n\n[… gekürzt]"
+    system_msg = (f"Du fasst Hörbuch-Abschnitte zusammen. Nutzer ist eingeschlafen.\n"
+                  f"{styles.get(style, styles['concise'])}\n{lang}\nKeine Spoiler.")
+
     client = OpenAI(api_key=OPENAI_API_KEY)
-    r = client.chat.completions.create(
-        model=LLM_MODEL, temperature=0.3, max_tokens=1000,
-        messages=[
-            {"role": "system", "content": f"Du fasst Hörbuch-Abschnitte zusammen. Nutzer ist eingeschlafen.\n{styles.get(style, styles['concise'])}\n{lang}\nKeine Spoiler."},
-            {"role": "user", "content": f"Hörbuch-Abschnitt:\n\n{text}"}])
-    return r.choices[0].message.content
+    chunks = _split_into_chunks(text)
+
+    if len(chunks) == 1:
+        return _call_llm(client, [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": f"Hörbuch-Abschnitt:\n\n{chunks[0]}"}])
+
+    # Summarize each chunk individually
+    logger.info("Text hat %d Zeichen – wird in %d Teile aufgeteilt", len(text), len(chunks))
+    partial_summaries: list[str] = []
+    for i, chunk in enumerate(chunks, 1):
+        logger.info("Zusammenfassung Teil %d/%d …", i, len(chunks))
+        part = _call_llm(client, [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": f"Hörbuch-Abschnitt (Teil {i} von {len(chunks)}):\n\n{chunk}"}])
+        partial_summaries.append(part)
+
+    # Merge partial summaries into one coherent summary
+    merged_input = "\n\n---\n\n".join(
+        f"Teil {i}: {s}" for i, s in enumerate(partial_summaries, 1))
+    return _call_llm(client, [
+        {"role": "system", "content": system_msg},
+        {"role": "user", "content": (
+            f"Die folgenden Teilzusammenfassungen stammen aus einem zusammenhängenden "
+            f"Hörbuch-Abschnitt. Fasse sie zu einer einzigen, kohärenten Zusammenfassung "
+            f"zusammen. Behalte alle wichtigen Details bei, entferne aber Redundanz.\n\n"
+            f"{merged_input}")}],
+        max_tokens=2000)
 
 
 # ---------------------------------------------------------------------------
@@ -560,7 +635,16 @@ async def create_recap(req: RecapRequest):
     if not text or len(text.strip()) < 10:
         raise HTTPException(status_code=400, detail="Kein Text gefunden")
     summary = summarize_text(text, req.summary_style, SUMMARY_LANGUAGE)
-    ti, to = len(text.split()) * 1.3, len(summary.split()) * 1.3
+    n_chunks = len(_split_into_chunks(text))
+    # Cost estimate: each chunk is sent as input, each produces output;
+    # if >1 chunk an extra merge call processes the partial summaries.
+    ti = len(text.split()) * 1.3  # total input tokens (all chunks)
+    to = len(summary.split()) * 1.3
+    if n_chunks > 1:
+        # partial summaries (~200 words each) become input for the merge step
+        ti += n_chunks * 200 * 1.3
+        # partial summary outputs
+        to += n_chunks * 200 * 1.3
     cost = (ti * 0.00015 + to * 0.0006) / 1000
     return RecapResponse(text_excerpt=text[:5000] + ("…" if len(text) > 5000 else ""),
                          summary=summary, chapters_covered=names,
