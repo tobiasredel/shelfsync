@@ -2,256 +2,495 @@
 <html lang="de">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Recap">
+    <meta name="theme-color" content="#0f1117">
+    <meta name="mobile-web-app-capable" content="yes">
     <title>Audiobook Recap</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display&display=swap" rel="stylesheet">
     <style>
-        :root{--bg:#0f1117;--surface:#1a1d27;--surface-hover:#222633;--border:#2a2e3d;--text:#e4e4e8;--text-muted:#8b8d9a;--accent:#e8a44a;--accent-glow:rgba(232,164,74,.15);--accent-hover:#f0b85e;--green:#4ade80;--green-dim:rgba(74,222,128,.12);--blue:#60a5fa;--blue-dim:rgba(96,165,250,.12);--purple:#a78bfa;--purple-dim:rgba(167,139,250,.12);--danger:#e85454;--radius:12px;--radius-sm:8px}
-        *{margin:0;padding:0;box-sizing:border-box}
-        body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+        :root{
+            --bg:#0f1117;--surface:#1a1d27;--surface-hover:#222633;--border:#2a2e3d;
+            --text:#e4e4e8;--text-muted:#8b8d9a;--accent:#e8a44a;--accent-glow:rgba(232,164,74,.15);
+            --accent-hover:#f0b85e;--green:#4ade80;--green-dim:rgba(74,222,128,.12);
+            --blue:#60a5fa;--blue-dim:rgba(96,165,250,.12);--purple:#a78bfa;
+            --purple-dim:rgba(167,139,250,.12);--danger:#e85454;
+            --radius:16px;--radius-sm:10px;
+            --safe-top:env(safe-area-inset-top,0px);
+            --safe-bottom:env(safe-area-inset-bottom,0px);
+            --safe-left:env(safe-area-inset-left,0px);
+            --safe-right:env(safe-area-inset-right,0px);
+        }
+        *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+        html{height:100%;overflow:hidden}
+        body{
+            font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);
+            height:100%;overflow:hidden;overscroll-behavior:none;
+            -webkit-text-size-adjust:100%;
+        }
         body::before{content:'';position:fixed;inset:0;background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");pointer-events:none;z-index:0}
-        .app{position:relative;z-index:1;max-width:720px;margin:0 auto;padding:2rem 1.5rem 4rem}
-        .header{text-align:center;margin-bottom:2rem;padding-top:1rem}
-        .header-icon{font-size:2.2rem;margin-bottom:.5rem}
-        .header h1{font-family:'DM Serif Display',serif;font-size:1.8rem;font-weight:400;letter-spacing:-.02em}
-        .header p{color:var(--text-muted);font-size:.9rem;margin-top:.4rem;font-weight:300}
-        .status-bar{display:flex;align-items:center;gap:.5rem;padding:.6rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:1.5rem;font-size:.82rem}
-        .status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0}
-        .status-dot.offline{background:var(--danger)}.status-dot.checking{background:var(--accent);animation:pulse 1.2s infinite}
+
+        /* App shell – full screen with safe areas */
+        .app{
+            position:relative;z-index:1;display:flex;flex-direction:column;height:100%;
+            max-width:720px;margin:0 auto;
+            padding-top:var(--safe-top);
+            padding-left:max(var(--safe-left), 1rem);
+            padding-right:max(var(--safe-right), 1rem);
+        }
+
+        /* Compact header */
+        .header{
+            display:flex;align-items:center;gap:.6rem;
+            padding:.8rem 0 .6rem;flex-shrink:0;
+        }
+        .header-icon{font-size:1.5rem;line-height:1}
+        .header h1{font-family:'DM Serif Display',serif;font-size:1.3rem;font-weight:400;letter-spacing:-.02em;flex:1}
+        .header .status-pill{
+            display:flex;align-items:center;gap:.35rem;
+            padding:.3rem .65rem;background:var(--surface);border:1px solid var(--border);
+            border-radius:20px;font-size:.72rem;color:var(--text-muted);flex-shrink:0;
+        }
+        .status-dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0}
+        .status-dot.offline{background:var(--danger)}
+        .status-dot.checking{background:var(--accent);animation:pulse 1.2s infinite}
         @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-        .status-text{color:var(--text-muted)}
-        .sl{font-size:.75rem;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:.6rem}
-        .book-list{display:flex;flex-direction:column;gap:.5rem;margin-bottom:1.5rem;max-height:280px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
-        .book-item{display:flex;align-items:center;gap:1rem;padding:.8rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;transition:all .2s}
-        .book-item:hover{background:var(--surface-hover);border-color:var(--accent)}.book-item.selected{border-color:var(--accent);background:var(--accent-glow)}.book-item.no-epub{opacity:.4;cursor:not-allowed}
-        .book-cover{width:48px;height:48px;border-radius:6px;object-fit:cover;background:var(--border);flex-shrink:0}
-        .book-info{flex:1;min-width:0}.book-title{font-weight:500;font-size:.92rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .book-meta{display:flex;align-items:center;gap:.5rem;font-size:.8rem;color:var(--text-muted);font-weight:300}
-        .badge{display:inline-flex;font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:.15rem .45rem;border-radius:4px}
-        .badge-green{background:var(--green-dim);color:var(--green)}.badge-red{background:rgba(232,84,84,.1);color:var(--danger)}.badge-purple{background:var(--purple-dim);color:var(--purple)}
-        .book-progress{font-size:.75rem;color:var(--accent);font-weight:500;flex-shrink:0}
-        .book-search{width:100%;padding:.6rem .9rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.88rem;outline:none;transition:border-color .2s;margin-bottom:.5rem}
+
+        /* Currently reading hero card */
+        .cr-card{
+            flex-shrink:0;background:linear-gradient(135deg,var(--surface) 0%,rgba(232,164,74,.08) 100%);
+            border:1px solid var(--accent);border-radius:var(--radius);
+            padding:1rem;margin-bottom:.8rem;
+            display:none;cursor:pointer;transition:transform .15s;
+        }
+        .cr-card.visible{display:flex;gap:1rem;align-items:center}
+        .cr-card:active{transform:scale(.98)}
+        .cr-label{font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--accent);margin-bottom:.3rem}
+        .cr-cover{width:56px;height:56px;border-radius:8px;object-fit:cover;background:var(--border);flex-shrink:0}
+        .cr-info{flex:1;min-width:0}
+        .cr-title{font-weight:500;font-size:.95rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .cr-meta{font-size:.78rem;color:var(--text-muted);font-weight:300;margin-top:.15rem}
+        .cr-progress{font-size:.8rem;color:var(--accent);font-weight:500;flex-shrink:0}
+
+        /* Search */
+        .search-wrap{flex-shrink:0;margin-bottom:.5rem;position:relative}
+        .book-search{
+            width:100%;padding:.7rem 1rem .7rem 2.4rem;
+            background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+            color:var(--text);font-family:inherit;font-size:16px;outline:none;transition:border-color .2s;
+        }
         .book-search:focus{border-color:var(--accent)}
         .book-search::placeholder{color:var(--text-muted)}
-        .filter-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem}
-        .filter-btn{padding:.3rem .7rem;background:var(--surface);border:1px solid var(--border);border-radius:20px;color:var(--text-muted);font-size:.78rem;cursor:pointer;transition:all .15s;font-family:inherit}
-        .filter-btn:hover{border-color:var(--accent);color:var(--accent)}
-        .filter-btn.active{border-color:var(--accent);background:var(--accent-glow);color:var(--accent)}
-        .book-fav{background:none;border:none;font-size:1.1rem;cursor:pointer;padding:.2rem .4rem;flex-shrink:0;transition:transform .15s;line-height:1;color:var(--text-muted)}
-        .book-fav:hover{transform:scale(1.2)}.book-fav.is-fav{color:var(--accent)}
+        .search-icon{position:absolute;left:.8rem;top:50%;transform:translateY(-50%);font-size:.9rem;color:var(--text-muted);pointer-events:none}
 
-        /* Position display */
-        .pos-box{display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem 1.5rem;margin-bottom:1.5rem}
-        .pos-box.visible{display:block}
-        .pos-row{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.8rem}
-        .pos-item{text-align:center;flex:1;min-width:80px}
-        .pos-value{font-family:'DM Serif Display',serif;font-size:1.6rem;color:var(--accent)}
-        .pos-label{font-size:.72rem;color:var(--text-muted);margin-top:.2rem}
-        .pos-chapter{font-size:.82rem;color:var(--text-muted);margin-top:.8rem;padding-top:.8rem;border-top:1px solid var(--border)}
-        .pos-nearby{font-size:.78rem;color:var(--text-muted);margin-top:.6rem;font-style:italic;line-height:1.5;background:var(--bg);padding:.6rem .8rem;border-radius:var(--radius-sm);max-height:80px;overflow:hidden}
-        .pos-cal-status{font-size:.72rem;margin-top:.6rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+        /* Book list – fills remaining space */
+        .book-list{
+            flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+            display:flex;flex-direction:column;gap:.4rem;
+            padding-bottom:calc(var(--safe-bottom) + .5rem);
+            scrollbar-width:thin;scrollbar-color:var(--border) transparent;
+        }
+        .sl{font-size:.7rem;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);padding:.4rem 0}
+
+        .book-item{
+            display:flex;align-items:center;gap:.8rem;
+            padding:.75rem .8rem;background:var(--surface);border:1px solid var(--border);
+            border-radius:var(--radius);cursor:pointer;transition:all .15s;
+            flex-shrink:0;min-height:64px;
+        }
+        .book-item:active{transform:scale(.98)}
+        .book-item.selected{border-color:var(--accent);background:var(--accent-glow)}
+        .book-item.no-epub{opacity:.4;cursor:not-allowed}
+        .book-cover{width:44px;height:44px;border-radius:8px;object-fit:cover;background:var(--border);flex-shrink:0}
+        .book-info{flex:1;min-width:0}
+        .book-title{font-weight:500;font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .book-meta{display:flex;align-items:center;gap:.4rem;font-size:.75rem;color:var(--text-muted);font-weight:300;margin-top:.15rem}
+        .badge{display:inline-flex;font-size:.62rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:.15rem .4rem;border-radius:4px}
+        .badge-green{background:var(--green-dim);color:var(--green)}
+        .badge-red{background:rgba(232,84,84,.1);color:var(--danger)}
         .badge-blue{background:var(--blue-dim);color:var(--blue)}
         .badge-amber{background:rgba(232,164,74,.12);color:var(--accent)}
+        .book-progress{font-size:.72rem;color:var(--accent);font-weight:500;flex-shrink:0;text-align:right;line-height:1.3}
+        .book-cr-badge{font-size:.62rem;color:var(--accent);display:block}
 
-        /* Calibration panel */
-        .cal-panel{display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem 1.5rem;margin-bottom:1.5rem}
+        /* Bottom sheet overlay */
+        .sheet-overlay{
+            position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10;
+            opacity:0;pointer-events:none;transition:opacity .25s;
+        }
+        .sheet-overlay.visible{opacity:1;pointer-events:auto}
+
+        .sheet{
+            position:fixed;left:0;right:0;bottom:0;z-index:11;
+            background:var(--bg);border-top-left-radius:20px;border-top-right-radius:20px;
+            max-height:92vh;display:flex;flex-direction:column;
+            transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);
+            padding-bottom:var(--safe-bottom);
+            max-width:720px;margin:0 auto;
+        }
+        .sheet.visible{transform:translateY(0)}
+
+        .sheet-handle{
+            width:36px;height:4px;background:var(--border);border-radius:2px;
+            margin:10px auto 6px;flex-shrink:0;
+        }
+        .sheet-header{
+            display:flex;align-items:center;gap:.8rem;padding:.6rem 1.2rem .8rem;
+            border-bottom:1px solid var(--border);flex-shrink:0;
+        }
+        .sheet-cover{width:48px;height:48px;border-radius:8px;object-fit:cover;background:var(--border);flex-shrink:0}
+        .sheet-title-wrap{flex:1;min-width:0}
+        .sheet-title{font-weight:500;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sheet-author{font-size:.78rem;color:var(--text-muted);font-weight:300}
+        .sheet-reading-btn{
+            background:none;border:1px solid var(--border);border-radius:8px;
+            padding:.4rem .7rem;font-family:inherit;font-size:.72rem;font-weight:500;
+            color:var(--text-muted);cursor:pointer;transition:all .15s;flex-shrink:0;
+        }
+        .sheet-reading-btn.active{border-color:var(--accent);background:var(--accent-glow);color:var(--accent)}
+        .sheet-reading-btn:active{transform:scale(.95)}
+
+        .sheet-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:1rem 1.2rem 1.5rem}
+
+        /* Position display */
+        .pos-box{display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.2rem;margin-bottom:1rem}
+        .pos-box.visible{display:block}
+        .pos-row{display:flex;justify-content:space-around;gap:.5rem}
+        .pos-item{text-align:center;flex:1}
+        .pos-value{font-family:'DM Serif Display',serif;font-size:1.5rem;color:var(--accent)}
+        .pos-label{font-size:.68rem;color:var(--text-muted);margin-top:.15rem}
+        .pos-chapter{font-size:.8rem;color:var(--text-muted);margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border)}
+        .pos-nearby{font-size:.75rem;color:var(--text-muted);margin-top:.5rem;font-style:italic;line-height:1.5;background:var(--bg);padding:.5rem .7rem;border-radius:var(--radius-sm);max-height:60px;overflow:hidden}
+        .pos-cal-status{font-size:.68rem;margin-top:.5rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+
+        /* Whisper-Sync panel */
+        .cal-panel{display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.2rem;margin-bottom:1rem}
         .cal-panel.visible{display:block}
-        .cal-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.8rem;flex-wrap:wrap}
-        .cal-input{width:80px;padding:.5rem .6rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.95rem;text-align:center;outline:none}
+        .cal-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.6rem;flex-wrap:wrap}
+        .cal-input{
+            padding:.5rem .6rem;background:var(--bg);border:1px solid var(--border);
+            border-radius:var(--radius-sm);color:var(--text);font-family:inherit;
+            font-size:16px;text-align:center;outline:none;
+        }
         .cal-input:focus{border-color:var(--purple)}
-        .cal-hint{font-size:.78rem;color:var(--text-muted)}
-        .cal-btn{padding:.5rem 1rem;background:var(--purple);color:white;border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.82rem;cursor:pointer;transition:all .15s}
-        .cal-btn:hover{opacity:.85;transform:translateY(-1px)}
+        .cal-hint{font-size:.75rem;color:var(--text-muted)}
+        .cal-btn{
+            padding:.5rem 1rem;background:var(--purple);color:white;border:none;
+            border-radius:var(--radius-sm);font-family:inherit;font-size:.8rem;
+            cursor:pointer;transition:all .15s;min-height:44px;
+        }
+        .cal-btn:active{opacity:.85;transform:scale(.97)}
         .cal-btn.danger{background:var(--danger)}
-        .cal-result{font-size:.82rem;color:var(--green);margin-top:.5rem;display:none}
+        .cal-result{font-size:.8rem;color:var(--green);margin-top:.5rem;display:none}
         .cal-result.visible{display:block}
 
         /* Tabs */
-        .tabs{display:flex;gap:0;margin-bottom:1.5rem;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-        .tab{flex:1;padding:.7rem;text-align:center;font-size:.82rem;font-weight:500;cursor:pointer;background:var(--surface);color:var(--text-muted);transition:all .2s;border:none;font-family:inherit}
+        .tabs{
+            display:flex;gap:0;margin-bottom:1rem;border:1px solid var(--border);
+            border-radius:var(--radius);overflow:hidden;flex-shrink:0;
+        }
+        .tab{
+            flex:1;padding:.65rem;text-align:center;font-size:.8rem;font-weight:500;
+            cursor:pointer;background:var(--surface);color:var(--text-muted);
+            transition:all .15s;border:none;font-family:inherit;min-height:44px;
+        }
         .tab:not(:last-child){border-right:1px solid var(--border)}
-        .tab:hover{color:var(--text);background:var(--surface-hover)}.tab.active{background:var(--accent-glow);color:var(--accent)}
+        .tab:active{background:var(--surface-hover)}
+        .tab.active{background:var(--accent-glow);color:var(--accent)}
         .tc{display:none}.tc.active{display:block}
 
-        /* Shared form elements */
-        .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem;margin-bottom:1.5rem}
-        .time-row{display:flex;gap:1rem;align-items:end;margin-bottom:1rem}
+        /* Cards & forms */
+        .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem;margin-bottom:1rem}
+        .time-row{display:flex;gap:.8rem;align-items:end;margin-bottom:.8rem}
         .time-group{flex:1}
-        .time-group label{display:block;font-size:.78rem;color:var(--text-muted);margin-bottom:.4rem}
-        .ti{width:100%;padding:.6rem .8rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',monospace;font-size:1.1rem;text-align:center;outline:none;transition:border-color .2s}
+        .time-group label{display:block;font-size:.75rem;color:var(--text-muted);margin-bottom:.3rem}
+        .ti{
+            width:100%;padding:.55rem .7rem;background:var(--bg);border:1px solid var(--border);
+            border-radius:var(--radius-sm);color:var(--text);font-family:'DM Sans',monospace;
+            font-size:16px;text-align:center;outline:none;transition:border-color .2s;
+        }
         .ti:focus{border-color:var(--accent)}
-        .tc2{color:var(--text-muted);font-size:1.2rem;font-weight:600;flex-shrink:0}
-        .th{font-size:.75rem;color:var(--text-muted);font-weight:300}
-        .qr{display:flex;gap:.4rem;flex-wrap:wrap}
-        .qb{padding:.35rem .75rem;background:var(--bg);border:1px solid var(--border);border-radius:20px;color:var(--text-muted);font-size:.78rem;cursor:pointer;transition:all .15s;font-family:inherit}
-        .qb:hover{border-color:var(--accent);color:var(--accent)}
-        .sr{display:flex;gap:.5rem;margin-bottom:1.5rem}
-        .so{flex:1;padding:.6rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);text-align:center;cursor:pointer;transition:all .2s;font-family:inherit;color:var(--text-muted);font-size:.82rem}
-        .so:hover{border-color:var(--accent);color:var(--text)}.so.selected{border-color:var(--accent);background:var(--accent-glow);color:var(--accent)}
-        .btn{width:100%;padding:1rem;border:none;border-radius:var(--radius);font-family:'DM Serif Display',serif;font-size:1.1rem;cursor:pointer;transition:all .25s}
-        .btn:hover:not(:disabled){transform:translateY(-1px)}.btn:disabled{opacity:.4;cursor:not-allowed}
-        .btn-a{background:var(--accent);color:var(--bg)}.btn-a:hover:not(:disabled){background:var(--accent-hover);box-shadow:0 8px 24px rgba(232,164,74,.25)}
-        .btn-b{background:var(--blue);color:var(--bg)}.btn-b:hover:not(:disabled){background:#93bbfd;box-shadow:0 8px 24px rgba(96,165,250,.25)}
-        .fi{width:100%;padding:.8rem 1rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.95rem;outline:none;transition:border-color .2s;resize:vertical;min-height:60px}
+        .tc2{color:var(--text-muted);font-size:1.1rem;font-weight:600;flex-shrink:0}
+        .th{font-size:.72rem;color:var(--text-muted);font-weight:300}
+        .qr{display:flex;gap:.35rem;flex-wrap:wrap}
+        .qb{
+            padding:.4rem .8rem;background:var(--bg);border:1px solid var(--border);
+            border-radius:20px;color:var(--text-muted);font-size:.78rem;
+            cursor:pointer;transition:all .15s;font-family:inherit;min-height:36px;
+        }
+        .qb:active{border-color:var(--accent);color:var(--accent)}
+        .sr{display:flex;gap:.4rem;margin-bottom:1rem}
+        .so{
+            flex:1;padding:.55rem;background:var(--surface);border:1px solid var(--border);
+            border-radius:var(--radius-sm);text-align:center;cursor:pointer;
+            transition:all .15s;font-family:inherit;color:var(--text-muted);
+            font-size:.78rem;min-height:44px;display:flex;align-items:center;justify-content:center;
+        }
+        .so:active{border-color:var(--accent);color:var(--text)}
+        .so.selected{border-color:var(--accent);background:var(--accent-glow);color:var(--accent)}
+        .btn{
+            width:100%;padding:.9rem;border:none;border-radius:var(--radius);
+            font-family:'DM Serif Display',serif;font-size:1.05rem;
+            cursor:pointer;transition:all .2s;min-height:50px;
+        }
+        .btn:active:not(:disabled){transform:scale(.98)}
+        .btn:disabled{opacity:.4;cursor:not-allowed}
+        .btn-a{background:var(--accent);color:var(--bg)}
+        .btn-b{background:var(--blue);color:var(--bg)}
+        .fi{
+            width:100%;padding:.75rem 1rem;background:var(--bg);border:1px solid var(--border);
+            border-radius:var(--radius-sm);color:var(--text);font-family:inherit;
+            font-size:16px;outline:none;transition:border-color .2s;resize:vertical;min-height:60px;
+        }
         .fi:focus{border-color:var(--blue)}
-        .fo{text-align:center;color:var(--text-muted);font-size:.82rem;margin:.8rem 0}
+        .fo{text-align:center;color:var(--text-muted);font-size:.8rem;margin:.6rem 0}
         .pi-row{display:flex;align-items:center;gap:.5rem}
-        .pi{width:100px;padding:.6rem .8rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:1rem;text-align:center;outline:none}
+        .pi{
+            width:100px;padding:.55rem .7rem;background:var(--bg);border:1px solid var(--border);
+            border-radius:var(--radius-sm);color:var(--text);font-family:inherit;
+            font-size:16px;text-align:center;outline:none;
+        }
         .pi:focus{border-color:var(--blue)}
-        .loader{display:none;flex-direction:column;align-items:center;gap:1rem;margin-top:2rem;padding:2rem}.loader.visible{display:flex}
-        .lw{display:flex;gap:4px;align-items:center;height:32px}
+
+        /* Loader */
+        .loader{display:none;flex-direction:column;align-items:center;gap:.8rem;margin-top:1.5rem;padding:1.5rem}
+        .loader.visible{display:flex}
+        .lw{display:flex;gap:4px;align-items:center;height:28px}
         .lw span{display:block;width:4px;height:8px;background:var(--accent);border-radius:2px;animation:wave 1s ease-in-out infinite}
-        .lw span:nth-child(2){animation-delay:.1s}.lw span:nth-child(3){animation-delay:.2s}.lw span:nth-child(4){animation-delay:.3s}.lw span:nth-child(5){animation-delay:.4s}
+        .lw span:nth-child(2){animation-delay:.1s}.lw span:nth-child(3){animation-delay:.2s}
+        .lw span:nth-child(4){animation-delay:.3s}.lw span:nth-child(5){animation-delay:.4s}
         @keyframes wave{0%,100%{height:8px;opacity:.5}50%{height:28px;opacity:1}}
-        .lt{color:var(--text-muted);font-size:.85rem}
-        .result{display:none;margin-top:2rem;animation:fi .5s ease}.result.visible{display:block}
-        @keyframes fi{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+        .lt{color:var(--text-muted);font-size:.82rem}
+
+        /* Results */
+        .result{display:none;margin-top:1.2rem;animation:fi .4s ease}.result.visible{display:block}
+        @keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
         .rc{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
-        .rh{padding:1.2rem 1.5rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
-        .rh h3{font-family:'DM Serif Display',serif;font-weight:400;font-size:1.1rem}
-        .rb2{display:flex;gap:.5rem}.rb3{font-size:.72rem;color:var(--text-muted);background:var(--bg);padding:.25rem .6rem;border-radius:12px}
-        .rbody{padding:1.5rem}
-        .rch{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:1rem}
-        .rct{font-size:.72rem;padding:.2rem .5rem;background:var(--accent-glow);color:var(--accent);border-radius:4px}
-        .st{line-height:1.7;font-size:.95rem;white-space:pre-wrap}
-        .tt{margin-top:1.2rem;padding-top:1.2rem;border-top:1px solid var(--border)}
-        .tb{background:none;border:none;color:var(--text-muted);font-size:.82rem;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:.4rem;transition:color .15s}.tb:hover{color:var(--text)}
-        .tb .arrow{transition:transform .2s;display:inline-block}.tb.open .arrow{transform:rotate(90deg)}
-        .txc{display:none;margin-top:.8rem;padding:1rem;background:var(--bg);border-radius:var(--radius-sm);font-size:.85rem;line-height:1.65;color:var(--text-muted);max-height:300px;overflow-y:auto;white-space:pre-wrap}.txc.visible{display:block}
-        .frc{display:none;margin-top:2rem;animation:fi .5s ease}.frc.visible{display:block}
-        .frd{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem}
-        .fts{font-family:'DM Serif Display',serif;font-size:2rem;color:var(--blue);margin-bottom:.5rem}
-        .fm{font-size:.85rem;color:var(--text-muted);margin-bottom:.8rem}
-        .fc{font-size:.82rem;color:var(--text-muted);font-style:italic;line-height:1.6;background:var(--bg);padding:.8rem;border-radius:var(--radius-sm);margin-bottom:1rem}
+        .rh{padding:1rem 1.2rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
+        .rh h3{font-family:'DM Serif Display',serif;font-weight:400;font-size:1rem}
+        .rb2{display:flex;gap:.4rem}.rb3{font-size:.68rem;color:var(--text-muted);background:var(--bg);padding:.2rem .5rem;border-radius:12px}
+        .rbody{padding:1.2rem}
+        .rch{display:flex;flex-wrap:wrap;gap:.3rem;margin-bottom:.8rem}
+        .rct{font-size:.68rem;padding:.2rem .45rem;background:var(--accent-glow);color:var(--accent);border-radius:4px}
+        .st{line-height:1.65;font-size:.9rem;white-space:pre-wrap}
+        .tt{margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border)}
+        .tb{
+            background:none;border:none;color:var(--text-muted);font-size:.8rem;
+            cursor:pointer;font-family:inherit;display:flex;align-items:center;
+            gap:.4rem;transition:color .15s;min-height:44px;
+        }
+        .tb:active{color:var(--text)}
+        .tb .arrow{transition:transform .2s;display:inline-block}
+        .tb.open .arrow{transform:rotate(90deg)}
+        .txc{
+            display:none;margin-top:.6rem;padding:.8rem;background:var(--bg);
+            border-radius:var(--radius-sm);font-size:.82rem;line-height:1.6;
+            color:var(--text-muted);max-height:250px;overflow-y:auto;white-space:pre-wrap;
+        }
+        .txc.visible{display:block}
+
+        /* Find result */
+        .frc{display:none;margin-top:1.2rem;animation:fi .4s ease}.frc.visible{display:block}
+        .frd{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem}
+        .fts{font-family:'DM Serif Display',serif;font-size:1.8rem;color:var(--blue);margin-bottom:.4rem}
+        .fm{font-size:.82rem;color:var(--text-muted);margin-bottom:.6rem}
+        .fc{
+            font-size:.78rem;color:var(--text-muted);font-style:italic;line-height:1.5;
+            background:var(--bg);padding:.7rem;border-radius:var(--radius-sm);margin-bottom:.8rem;
+        }
         .fc mark{background:rgba(96,165,250,.25);color:var(--blue);padding:.1rem .2rem;border-radius:2px}
-        .sb{padding:.7rem 1.5rem;background:var(--green);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.88rem;font-weight:500;cursor:pointer;transition:all .2s}
-        .sb:hover{background:#6ee7a0;transform:translateY(-1px)}.sb:disabled{opacity:.4;cursor:not-allowed}
-        .ss{font-size:.78rem;color:var(--green);margin-top:.5rem;display:none}.ss.visible{display:block}
-        .err{display:none;margin-top:1.5rem;padding:1rem 1.2rem;background:rgba(232,84,84,.08);border:1px solid rgba(232,84,84,.25);border-radius:var(--radius-sm);color:var(--danger);font-size:.88rem}.err.visible{display:block}
-        @media(max-width:500px){.app{padding:1.2rem 1rem 3rem}.header h1{font-size:1.5rem}.time-row,.pos-row,.sr{flex-direction:column}}
+        .sb{
+            padding:.7rem 1.2rem;background:var(--green);color:var(--bg);border:none;
+            border-radius:var(--radius-sm);font-family:inherit;font-size:.85rem;
+            font-weight:500;cursor:pointer;transition:all .15s;min-height:44px;
+        }
+        .sb:active{transform:scale(.97)}
+        .sb:disabled{opacity:.4;cursor:not-allowed}
+        .ss{font-size:.75rem;color:var(--green);margin-top:.4rem;display:none}
+        .ss.visible{display:block}
+        .err{
+            display:none;margin-top:1rem;padding:.8rem 1rem;
+            background:rgba(232,84,84,.08);border:1px solid rgba(232,84,84,.25);
+            border-radius:var(--radius-sm);color:var(--danger);font-size:.85rem;
+        }
+        .err.visible{display:block}
+
+        /* Loading placeholder for book list */
+        .books-loading{padding:2rem;text-align:center;color:var(--text-muted);font-size:.85rem}
+
+        /* Desktop enhancements */
+        @media(min-width:600px){
+            .app{padding-left:1.5rem;padding-right:1.5rem}
+            .book-item:hover{background:var(--surface-hover);border-color:var(--accent)}
+            .btn:hover:not(:disabled){transform:translateY(-1px)}
+            .btn-a:hover:not(:disabled){background:var(--accent-hover);box-shadow:0 8px 24px rgba(232,164,74,.25)}
+            .btn-b:hover:not(:disabled){background:#93bbfd;box-shadow:0 8px 24px rgba(96,165,250,.25)}
+            .sb:hover{background:#6ee7a0;transform:translateY(-1px)}
+            .qb:hover{border-color:var(--accent);color:var(--accent)}
+            .so:hover{border-color:var(--accent);color:var(--text)}
+            .sheet{max-height:85vh}
+        }
     </style>
 </head>
 <body>
 <div class="app">
-    <div class="header"><div class="header-icon">🎧</div><h1>Audiobook Recap</h1><p>Zusammenfassen · Position finden · Sync</p></div>
-    <div class="status-bar"><div class="status-dot checking" id="sDot"></div><span class="status-text" id="sTxt">Verbinde…</span></div>
-
-    <div class="sl">Hörbuch auswählen</div>
-    <input type="text" class="book-search" id="bSearch" placeholder="Suche nach Titel oder Autor..." oninput="filterBooks()">
-    <div class="filter-row">
-        <button class="filter-btn" id="favFilter" onclick="toggleFavFilter()">★ Nur Favoriten</button>
-    </div>
-    <div class="book-list" id="bList"><div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:.88rem">Lade…</div></div>
-
-    <!-- Position -->
-    <div class="pos-box" id="posBox">
-        <div class="sl" style="margin-bottom:.8rem">Aktuelle Position</div>
-        <div class="pos-row">
-            <div class="pos-item"><div class="pos-value" id="pPage">–</div><div class="pos-label">Seite</div></div>
-            <div class="pos-item"><div class="pos-value" id="pPct">–</div><div class="pos-label">Prozent</div></div>
-        </div>
-        <div class="pos-chapter" id="pChName"></div>
-        <div class="pos-nearby" id="pNear"></div>
-        <div class="pos-cal-status" id="pCalStatus"></div>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-icon">🎧</div>
+        <h1>Audiobook Recap</h1>
+        <div class="status-pill"><div class="status-dot checking" id="sDot"></div><span id="sTxt">Verbinde…</span></div>
     </div>
 
-    <!-- Whisper-Sync -->
-    <div class="cal-panel" id="calPanel">
-        <div class="sl" style="margin-bottom:.8rem">Whisper-Sync</div>
-        <p class="cal-hint" style="margin-bottom:.8rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Ergebnisse werden dauerhaft gespeichert. Kosten: ~$0.02.</p>
-        <div id="whisperStatus" style="margin-bottom:.8rem"></div>
-        <div class="cal-row" style="gap:.5rem;flex-wrap:wrap">
-            <select class="cal-input" id="whisperLang" style="width:auto">
-                <option value="de">Deutsch</option>
-                <option value="en">English</option>
-                <option value="fr">Français</option>
-                <option value="es">Español</option>
-            </select>
-            <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
-            <span class="cal-hint">Samples</span>
-            <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
-            <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
+    <!-- Currently Reading hero card -->
+    <div class="cr-card" id="crCard" onclick="pickCurrentlyReading()">
+        <img class="cr-cover" id="crCover" src="" alt="">
+        <div class="cr-info">
+            <div class="cr-label">Lese ich gerade</div>
+            <div class="cr-title" id="crTitle"></div>
+            <div class="cr-meta" id="crMeta"></div>
         </div>
-        <div id="whisperProgress" style="display:none;margin-top:.8rem">
-            <div style="display:flex;align-items:center;gap:.5rem">
-                <div class="spinner" style="width:16px;height:16px;border-width:2px"></div>
-                <span id="whisperProgressText">Starte...</span>
+        <div class="cr-progress" id="crProgress"></div>
+    </div>
+
+    <!-- Search -->
+    <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" class="book-search" id="bSearch" placeholder="Suche nach Titel oder Autor..." oninput="filterBooks()">
+    </div>
+
+    <!-- Book list -->
+    <div class="book-list" id="bList">
+        <div class="books-loading">Lade Bibliothek…</div>
+    </div>
+</div>
+
+<!-- Bottom sheet for book detail -->
+<div class="sheet-overlay" id="sheetOverlay" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-header">
+        <img class="sheet-cover" id="sheetCover" src="" alt="">
+        <div class="sheet-title-wrap">
+            <div class="sheet-title" id="sheetTitle"></div>
+            <div class="sheet-author" id="sheetAuthor"></div>
+        </div>
+        <button class="sheet-reading-btn" id="sheetReadingBtn" onclick="toggleCurrentlyReading()">
+            📖 Lese ich
+        </button>
+    </div>
+    <div class="sheet-body">
+        <!-- Position -->
+        <div class="pos-box" id="posBox">
+            <div class="sl" style="margin-bottom:.6rem">Aktuelle Position</div>
+            <div class="pos-row">
+                <div class="pos-item"><div class="pos-value" id="pPage">–</div><div class="pos-label">Seite</div></div>
+                <div class="pos-item"><div class="pos-value" id="pPct">–</div><div class="pos-label">Prozent</div></div>
+            </div>
+            <div class="pos-chapter" id="pChName"></div>
+            <div class="pos-nearby" id="pNear"></div>
+            <div class="pos-cal-status" id="pCalStatus"></div>
+        </div>
+
+        <!-- Whisper-Sync -->
+        <div class="cal-panel" id="calPanel">
+            <div class="sl" style="margin-bottom:.6rem">Whisper-Sync</div>
+            <p class="cal-hint" style="margin-bottom:.6rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Kosten: ~$0.02.</p>
+            <div id="whisperStatus" style="margin-bottom:.6rem"></div>
+            <div class="cal-row" style="gap:.4rem;flex-wrap:wrap">
+                <select class="cal-input" id="whisperLang" style="width:auto">
+                    <option value="de">Deutsch</option>
+                    <option value="en">English</option>
+                    <option value="fr">Français</option>
+                    <option value="es">Español</option>
+                </select>
+                <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
+                <span class="cal-hint">Samples</span>
+                <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
+                <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
+            </div>
+            <div id="whisperProgress" style="display:none;margin-top:.6rem">
+                <div style="display:flex;align-items:center;gap:.5rem">
+                    <div class="status-dot checking"></div>
+                    <span id="whisperProgressText" style="font-size:.82rem;color:var(--text-muted)">Starte...</span>
+                </div>
+            </div>
+            <details id="whisperDetails" style="display:none;margin-top:.6rem">
+                <summary style="cursor:pointer;font-size:.8rem;color:var(--text-muted);min-height:44px;display:flex;align-items:center">Ankerpunkte anzeigen</summary>
+                <div id="whisperResult" style="margin-top:.4rem"></div>
+            </details>
+            <div class="cal-result" id="calRes"></div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="sTab('recap')">📝 Recap</button>
+            <button class="tab" onclick="sTab('find')">🔍 Finden</button>
+        </div>
+
+        <!-- TAB: Recap -->
+        <div class="tc active" id="t-recap">
+            <div class="card">
+                <div class="sl" style="margin-bottom:.6rem">Zeitraum</div>
+                <div class="time-row">
+                    <div class="time-group"><label>Von</label><div style="display:flex;align-items:center;gap:.3rem"><input type="number" class="ti" id="sH" min="0" value="0" style="width:60px"><span class="tc2">:</span><input type="number" class="ti" id="sM" min="0" max="59" value="0" style="width:60px"></div><span class="th">Std:Min</span></div>
+                    <div class="time-group"><label>Bis</label><div style="display:flex;align-items:center;gap:.3rem"><input type="number" class="ti" id="eH" min="0" value="0" style="width:60px"><span class="tc2">:</span><input type="number" class="ti" id="eM" min="0" max="59" value="10" style="width:60px"></div><span class="th">Std:Min</span></div>
+                </div>
+                <div class="sl" style="margin-top:.3rem;margin-bottom:.4rem">Schnellauswahl</div>
+                <div class="qr">
+                    <button class="qb" onclick="qr(5)">5 min</button><button class="qb" onclick="qr(10)">10 min</button><button class="qb" onclick="qr(15)">15 min</button><button class="qb" onclick="qr(20)">20 min</button><button class="qb" onclick="qr(30)">30 min</button>
+                </div>
+            </div>
+            <div class="sl">Stil</div>
+            <div class="sr">
+                <button class="so selected" data-s="concise" onclick="ss(this)">🎯 Kurz</button>
+                <button class="so" data-s="detailed" onclick="ss(this)">📖 Ausführlich</button>
+                <button class="so" data-s="bullet" onclick="ss(this)">📋 Stichpunkte</button>
+            </div>
+            <button class="btn btn-a" id="rBtn" onclick="doRecap()">Zusammenfassung erstellen</button>
+            <div class="loader" id="rLoad"><div class="lw"><span></span><span></span><span></span><span></span><span></span></div><div class="lt" id="rLT">EPUB laden…</div></div>
+            <div class="err" id="rErr"></div>
+            <div class="result" id="rRes">
+                <div class="rc"><div class="rh"><h3>📝 Zusammenfassung</h3><div class="rb2"><span class="rb3" id="rCost"></span></div></div>
+                <div class="rbody"><div class="rch" id="rCh"></div><div class="st" id="rSum"></div>
+                <div class="tt"><button class="tb" onclick="tog(this,'rTx')"><span class="arrow">›</span> Text anzeigen</button><div class="txc" id="rTx"></div></div></div></div>
             </div>
         </div>
-        <details id="whisperDetails" style="display:none;margin-top:.8rem">
-            <summary style="cursor:pointer;font-size:.82rem;color:var(--text-muted)">Ankerpunkte anzeigen</summary>
-            <div id="whisperResult" style="margin-top:.5rem"></div>
-        </details>
-        <div class="cal-result" id="calRes"></div>
-    </div>
 
-    <!-- Tabs -->
-    <div class="tabs">
-        <button class="tab active" onclick="sTab('recap')">📝 Zusammenfassung</button>
-        <button class="tab" onclick="sTab('find')">🔍 Stelle finden</button>
-    </div>
-
-    <!-- TAB: Recap -->
-    <div class="tc active" id="t-recap">
-        <div class="card">
-            <div class="sl" style="margin-bottom:.8rem">Zeitraum</div>
-            <div class="time-row">
-                <div class="time-group"><label>Von</label><div style="display:flex;align-items:center;gap:.3rem"><input type="number" class="ti" id="sH" min="0" value="0" style="width:60px"><span class="tc2">:</span><input type="number" class="ti" id="sM" min="0" max="59" value="0" style="width:60px"></div><span class="th">Std:Min</span></div>
-                <div class="time-group"><label>Bis</label><div style="display:flex;align-items:center;gap:.3rem"><input type="number" class="ti" id="eH" min="0" value="0" style="width:60px"><span class="tc2">:</span><input type="number" class="ti" id="eM" min="0" max="59" value="10" style="width:60px"></div><span class="th">Std:Min</span></div>
+        <!-- TAB: Find -->
+        <div class="tc" id="t-find">
+            <div class="card">
+                <div class="sl" style="margin-bottom:.5rem">Textstelle eingeben</div>
+                <textarea class="fi" id="fTxt" placeholder="Einen Satz aus dem Kindle eingeben…"></textarea>
+                <div class="fo">— oder —</div>
+                <div class="sl" style="margin-bottom:.3rem">Seitenzahl eingeben</div>
+                <div class="pi-row">
+                    <span style="color:var(--text-muted);font-size:.85rem">Seite</span>
+                    <input type="number" class="pi" id="fPg" min="1" placeholder="42">
+                    <span style="color:var(--text-muted);font-size:.78rem" id="pgTotal"></span>
+                </div>
             </div>
-            <div class="sl" style="margin-top:.5rem;margin-bottom:.5rem">Schnellauswahl</div>
-            <div class="qr">
-                <button class="qb" onclick="qr(5)">5 min</button><button class="qb" onclick="qr(10)">10 min</button><button class="qb" onclick="qr(15)">15 min</button><button class="qb" onclick="qr(20)">20 min</button><button class="qb" onclick="qr(30)">30 min</button>
-            </div>
-        </div>
-        <div class="sl">Stil</div>
-        <div class="sr">
-            <button class="so selected" data-s="concise" onclick="ss(this)">🎯 Kurz</button>
-            <button class="so" data-s="detailed" onclick="ss(this)">📖 Ausführlich</button>
-            <button class="so" data-s="bullet" onclick="ss(this)">📋 Stichpunkte</button>
-        </div>
-        <button class="btn btn-a" id="rBtn" onclick="doRecap()" disabled>Zusammenfassung erstellen</button>
-        <div class="loader" id="rLoad"><div class="lw"><span></span><span></span><span></span><span></span><span></span></div><div class="lt" id="rLT">EPUB laden…</div></div>
-        <div class="err" id="rErr"></div>
-        <div class="result" id="rRes">
-            <div class="rc"><div class="rh"><h3>📝 Zusammenfassung</h3><div class="rb2"><span class="rb3" id="rCost"></span></div></div>
-            <div class="rbody"><div class="rch" id="rCh"></div><div class="st" id="rSum"></div>
-            <div class="tt"><button class="tb" onclick="tog(this,'rTx')"><span class="arrow">›</span> Text anzeigen</button><div class="txc" id="rTx"></div></div></div></div>
-        </div>
-    </div>
-
-    <!-- TAB: Find -->
-    <div class="tc" id="t-find">
-        <div class="card">
-            <div class="sl" style="margin-bottom:.6rem">Textstelle eingeben</div>
-            <textarea class="fi" id="fTxt" placeholder="Einen Satz aus dem Kindle eingeben…"></textarea>
-            <div class="fo">— oder —</div>
-            <div class="sl" style="margin-bottom:.4rem">Seitenzahl eingeben</div>
-            <div class="pi-row">
-                <span style="color:var(--text-muted);font-size:.88rem">Seite</span>
-                <input type="number" class="pi" id="fPg" min="1" placeholder="42">
-                <span style="color:var(--text-muted);font-size:.82rem" id="pgTotal"></span>
-            </div>
-        </div>
-        <button class="btn btn-b" id="fBtn" onclick="doFind()" disabled>Audiostelle finden</button>
-        <div class="loader" id="fLoad"><div class="lw"><span></span><span></span><span></span><span></span><span></span></div><div class="lt">Suche…</div></div>
-        <div class="err" id="fErr"></div>
-        <div class="frc" id="fRes">
-            <div class="frd">
-                <div class="sl">Audio-Position</div>
-                <div class="fts" id="fTs"></div>
-                <div class="fm" id="fMeta"></div>
-                <div class="fc" id="fCtx"></div>
-                <button class="sb" id="sBtn" onclick="doSync()">↻ Position in Audiobookshelf setzen</button>
-                <div class="ss" id="sStat">✓ Position aktualisiert!</div>
+            <button class="btn btn-b" id="fBtn" onclick="doFind()">Audiostelle finden</button>
+            <div class="loader" id="fLoad"><div class="lw"><span></span><span></span><span></span><span></span><span></span></div><div class="lt">Suche…</div></div>
+            <div class="err" id="fErr"></div>
+            <div class="frc" id="fRes">
+                <div class="frd">
+                    <div class="sl">Audio-Position</div>
+                    <div class="fts" id="fTs"></div>
+                    <div class="fm" id="fMeta"></div>
+                    <div class="fc" id="fCtx"></div>
+                    <button class="sb" id="sBtn" onclick="doSync()">↻ Position in Audiobookshelf setzen</button>
+                    <div class="ss" id="sStat">✓ Position aktualisiert!</div>
+                </div>
             </div>
         </div>
     </div>
 </div>
 
 <script>
-let sel=null,style='concise',books=[],lastTs=null,showFavsOnly=false;
+let sel=null,style='concise',books=[],lastTs=null;
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
 
 document.addEventListener('DOMContentLoaded',async()=>{
@@ -260,21 +499,41 @@ document.addEventListener('DOMContentLoaded',async()=>{
         books=r.books||[];
         renderBooks();
         const ec=books.filter(b=>b.has_epub).length;
-        st('on',`${books.length} Bücher, ${ec} mit EPUB`);
-    }catch(e){st('off','Verbindung fehlgeschlagen');$('#bList').innerHTML=`<div style="padding:2rem;text-align:center;color:var(--danger)">${esc(e.message)}</div>`}
+        st('on',`${books.length} Bücher`);
+        // Auto-select currently reading book
+        const cr=books.find(b=>b.is_currently_reading);
+        if(cr){
+            showCRCard(cr);
+            pickBook(cr.id);
+        }
+    }catch(e){
+        st('off','Offline');
+        $('#bList').innerHTML='<div class="books-loading" style="color:var(--danger)">'+esc(e.message)+'</div>';
+    }
 });
 
-function st(s,t){$('#sDot').className='status-dot'+(s==='off'?' offline':s==='chk'?' checking':'');$('#sTxt').textContent=t}
+function st(s,t){
+    $('#sDot').className='status-dot'+(s==='off'?' offline':s==='chk'?' checking':'');
+    $('#sTxt').textContent=t;
+}
 function fmt(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h>0?`${h}h ${m}m`:`${m}m`}
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML}
+
+function showCRCard(b){
+    if(!b){$('#crCard').classList.remove('visible');return}
+    $('#crCover').src=b.cover;
+    $('#crTitle').textContent=b.title;
+    $('#crMeta').textContent=b.author;
+    $('#crProgress').textContent=fmt(b.current_time)+' / '+fmt(b.duration);
+    $('#crCard').classList.add('visible');
+}
 
 function getFilteredBooks(){
     let fb=[...books];
     const q=($('#bSearch').value||'').toLowerCase().trim();
     if(q) fb=fb.filter(b=>b.title.toLowerCase().includes(q)||b.author.toLowerCase().includes(q));
-    if(showFavsOnly) fb=fb.filter(b=>b.is_favorite);
     fb.sort((a,b)=>{
-        if(a.is_favorite!==b.is_favorite) return a.is_favorite?-1:1;
+        if(a.is_currently_reading!==b.is_currently_reading) return a.is_currently_reading?-1:1;
         return a.title.localeCompare(b.title);
     });
     return fb;
@@ -283,21 +542,14 @@ function getFilteredBooks(){
 function renderBooks(){
     const l=$('#bList');
     const fb=getFilteredBooks();
-    if(!books.length){l.textContent='';const d=document.createElement('div');d.style.cssText='padding:2rem;text-align:center;color:var(--text-muted)';d.textContent='Keine Bücher';l.appendChild(d);return}
-    if(!fb.length){l.textContent='';const d=document.createElement('div');d.style.cssText='padding:2rem;text-align:center;color:var(--text-muted)';d.textContent='Keine Treffer';l.appendChild(d);return}
+    if(!books.length){l.textContent='';const d=document.createElement('div');d.className='books-loading';d.textContent='Keine Bücher';l.appendChild(d);return}
+    if(!fb.length){l.textContent='';const d=document.createElement('div');d.className='books-loading';d.textContent='Keine Treffer';l.appendChild(d);return}
     l.textContent='';
     fb.forEach(b=>{
         const item=document.createElement('div');
         item.className='book-item'+(b.has_epub?'':' no-epub')+(sel&&sel.id===b.id?' selected':'');
         item.dataset.id=b.id;
         if(b.has_epub) item.onclick=()=>pickBook(b.id);
-
-        const fav=document.createElement('button');
-        fav.className='book-fav'+(b.is_favorite?' is-fav':'');
-        fav.textContent=b.is_favorite?'\u2605':'\u2606';
-        fav.title=b.is_favorite?'Favorit entfernen':'Als Favorit markieren';
-        fav.onclick=(e)=>{e.stopPropagation();toggleFav(b.id)};
-        item.appendChild(fav);
 
         const img=document.createElement('img');
         img.className='book-cover';img.src=b.cover;img.alt='';
@@ -309,10 +561,12 @@ function renderBooks(){
         const meta=document.createElement('div');meta.className='book-meta';
         const author=document.createElement('span');author.textContent=b.author;meta.appendChild(author);
         const epubBadge=document.createElement('span');epubBadge.className='badge '+(b.has_epub?'badge-green':'badge-red');epubBadge.textContent=b.has_epub?'\u2713 EPUB':'\u2717 EPUB';meta.appendChild(epubBadge);
-        if(b.is_calibrated){const cb=document.createElement('span');cb.className='badge badge-green';cb.textContent='Whisper-Sync';meta.appendChild(cb)}
+        if(b.is_calibrated){const cb=document.createElement('span');cb.className='badge badge-green';cb.textContent='Sync';meta.appendChild(cb)}
         info.appendChild(title);info.appendChild(meta);item.appendChild(info);
 
-        const prog=document.createElement('div');prog.className='book-progress';prog.textContent=fmt(b.current_time)+' / '+fmt(b.duration);
+        const prog=document.createElement('div');prog.className='book-progress';
+        prog.textContent=fmt(b.current_time)+' / '+fmt(b.duration);
+        if(b.is_currently_reading){const cr=document.createElement('span');cr.className='book-cr-badge';cr.textContent='📖 Lese ich';prog.appendChild(cr)}
         item.appendChild(prog);
         l.appendChild(item);
     });
@@ -320,30 +574,64 @@ function renderBooks(){
 
 function filterBooks(){renderBooks()}
 
-function toggleFavFilter(){
-    showFavsOnly=!showFavsOnly;
-    $('#favFilter').classList.toggle('active',showFavsOnly);
-    renderBooks();
-}
-
-async function toggleFav(id){
-    const b=books.find(x=>x.id===id);if(!b)return;
-    const wasFav=b.is_favorite;
-    try{
-        const r=await fetch('/api/favorites/'+encodeURIComponent(id),{method:wasFav?'DELETE':'POST'});
-        if(!r.ok)return;
-        b.is_favorite=!wasFav;
-        renderBooks();
-    }catch(e){}
+function pickCurrentlyReading(){
+    const cr=books.find(b=>b.is_currently_reading);
+    if(cr) pickBook(cr.id);
 }
 
 async function pickBook(id){
+    sel=books.find(b=>b.id===id);
+    if(!sel)return;
+    // Update book list selection
     $$('.book-item').forEach(b=>b.classList.remove('selected'));
     $(`.book-item[data-id="${id}"]`)?.classList.add('selected');
-    sel=books.find(b=>b.id===id);
-    $('#rBtn').disabled=false;$('#fBtn').disabled=false;
+
+    // Populate sheet header
+    $('#sheetCover').src=sel.cover;
+    $('#sheetTitle').textContent=sel.title;
+    $('#sheetAuthor').textContent=sel.author+' · '+fmt(sel.current_time)+' / '+fmt(sel.duration);
+    $('#sheetReadingBtn').classList.toggle('active',!!sel.is_currently_reading);
+
+    // Set end time from current position
     if(sel){const m=sel.current_time/60;$('#eH').value=Math.floor(m/60);$('#eM').value=Math.floor(m%60)}
+
+    // Open the sheet
+    openSheet();
+
+    // Load position and calibration data (lazy – only on click)
     loadPos();loadCal();
+}
+
+function openSheet(){
+    $('#sheetOverlay').classList.add('visible');
+    $('#sheet').classList.add('visible');
+    document.body.style.overflow='hidden';
+}
+
+function closeSheet(){
+    $('#sheetOverlay').classList.remove('visible');
+    $('#sheet').classList.remove('visible');
+    document.body.style.overflow='';
+}
+
+async function toggleCurrentlyReading(){
+    if(!sel)return;
+    const wasReading=sel.is_currently_reading;
+    try{
+        if(wasReading){
+            await fetch('/api/currently-reading',{method:'DELETE'});
+            sel.is_currently_reading=false;
+            showCRCard(null);
+        }else{
+            // Clear old "currently reading"
+            books.forEach(b=>b.is_currently_reading=false);
+            await fetch('/api/currently-reading/'+encodeURIComponent(sel.id),{method:'POST'});
+            sel.is_currently_reading=true;
+            showCRCard(sel);
+        }
+        $('#sheetReadingBtn').classList.toggle('active',sel.is_currently_reading);
+        renderBooks();
+    }catch(e){}
 }
 
 async function loadPos(){
@@ -351,15 +639,15 @@ async function loadPos(){
     try{
         const d=await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({library_item_id:sel.id,current_time_seconds:sel.current_time})})).json();
-        $('#pPage').textContent=`${d.estimated_page} / ${d.total_pages}`;
-        $('#pPct').textContent=`${d.percentage}%`;
-        $('#pChName').textContent=d.chapter_title?`📖 ${d.chapter_title}`:'';
-        $('#pNear').textContent=d.nearby_text?`„${d.nearby_text}"`:'';
-        $('#pCalStatus').innerHTML = d.mapping_quality==='whisper'
+        $('#pPage').textContent=d.estimated_page+' / '+d.total_pages;
+        $('#pPct').textContent=d.percentage+'%';
+        $('#pChName').textContent=d.chapter_title?'📖 '+d.chapter_title:'';
+        $('#pNear').textContent=d.nearby_text?'\u201E'+d.nearby_text+'\u201C':'';
+        $('#pCalStatus').innerHTML=d.mapping_quality==='whisper'
             ?'<span class="badge badge-green">Whisper-Sync aktiv</span>'
             :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync</span>';
         $('#posBox').classList.add('visible');
-        $('#pgTotal').textContent=`von ${d.total_pages}`;
+        $('#pgTotal').textContent='von '+d.total_pages;
     }catch(e){$('#posBox').classList.remove('visible')}
 }
 
@@ -369,9 +657,7 @@ async function loadCal(){
     loadWhisperStatus();
 }
 
-function showCal(msg){$('#calRes').textContent=msg;$('#calRes').classList.add('visible');setTimeout(()=>$('#calRes').classList.remove('visible'),5000)}
-
-function sTab(n){$$('.tab').forEach((t,i)=>t.classList.toggle('active',['recap','find'][i]===n));$$('.tc').forEach(c=>c.classList.remove('active'));$(`#t-${n}`).classList.add('active')}
+function sTab(n){$$('.tab').forEach((t,i)=>t.classList.toggle('active',['recap','find'][i]===n));$$('.tc').forEach(c=>c.classList.remove('active'));$('#t-'+n).classList.add('active')}
 function qr(m){if(!sel)return;const c=sel.current_time/60,s=Math.max(0,c-m);$('#sH').value=Math.floor(s/60);$('#sM').value=Math.floor(s%60);$('#eH').value=Math.floor(c/60);$('#eM').value=Math.floor(c%60)}
 function ss(el){$$('.so').forEach(s=>s.classList.remove('selected'));el.classList.add('selected');style=el.dataset.s}
 function gm(p){return(parseInt($('#'+p+'H').value)||0)*60+(parseInt($('#'+p+'M').value)||0)}
@@ -386,8 +672,8 @@ async function doRecap(){
         const r=await fetch('/api/recap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({library_item_id:sel.id,start_minutes:sm,end_minutes:em,summary_style:style})});
         clearInterval(iv);if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
         const d=await r.json();
-        $('#rSum').textContent=d.summary;$('#rTx').textContent=d.text_excerpt;$('#rCost').textContent=`~$${d.cost_estimate_usd.toFixed(4)}`;
-        $('#rCh').innerHTML=(d.chapters_covered||[]).map(c=>`<span class="rct">${esc(c)}</span>`).join('');
+        $('#rSum').textContent=d.summary;$('#rTx').textContent=d.text_excerpt;$('#rCost').textContent='~$'+d.cost_estimate_usd.toFixed(4);
+        $('#rCh').innerHTML=(d.chapters_covered||[]).map(c=>'<span class="rct">'+esc(c)+'</span>').join('');
         $('#rRes').classList.add('visible');
     }catch(e){clearInterval(iv);se('rErr',e.message)}
     finally{$('#rLoad').classList.remove('visible');$('#rBtn').disabled=false;$('#rBtn').textContent='Zusammenfassung erstellen'}
@@ -401,10 +687,10 @@ async function doFind(){
         let d;
         if(t){const r=await fetch('/api/find-text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({library_item_id:sel.id,query:t})});
             if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}d=await r.json();
-            $('#fTs').textContent=d.audio_timestamp_formatted;$('#fMeta').textContent=`${d.chapter_title} · ${d.confidence==='exact'?'Exakt':'Ungefähr'}`;$('#fCtx').innerHTML=hl(d.context,t);
+            $('#fTs').textContent=d.audio_timestamp_formatted;$('#fMeta').textContent=d.chapter_title+' \u00b7 '+(d.confidence==='exact'?'Exakt':'Ungefähr');$('#fCtx').innerHTML=hl(d.context,t);
         }else{const r=await fetch('/api/page-to-audio',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({library_item_id:sel.id,page_number:p})});
             if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}d=await r.json();
-            $('#fTs').textContent=d.audio_timestamp_formatted;$('#fMeta').textContent=`${d.chapter_title} · Seite ${p}`;$('#fCtx').textContent=d.nearby_text?`„${d.nearby_text}"`:''}
+            $('#fTs').textContent=d.audio_timestamp_formatted;$('#fMeta').textContent=d.chapter_title+' \u00b7 Seite '+p;$('#fCtx').textContent=d.nearby_text?'\u201E'+d.nearby_text+'\u201C':''}
         lastTs=d.audio_timestamp_seconds;$('#sStat').classList.remove('visible');$('#fRes').classList.add('visible');
     }catch(e){se('fErr',e.message)}finally{$('#fLoad').classList.remove('visible');$('#fBtn').disabled=false}
 }
@@ -413,7 +699,7 @@ function hl(ctx,q){if(!q)return esc(ctx);const i=ctx.toLowerCase().indexOf(q.toL
 
 async function doSync(){
     if(!sel||lastTs===null)return;$('#sBtn').disabled=true;
-    try{const r=await fetch(`/api/sync-progress?library_item_id=${sel.id}&time_seconds=${lastTs}`,{method:'POST'});
+    try{const r=await fetch('/api/sync-progress?library_item_id='+sel.id+'&time_seconds='+lastTs,{method:'POST'});
         if(!r.ok)throw new Error('Sync fehlgeschlagen');$('#sStat').classList.add('visible');sel.current_time=lastTs;loadPos();
     }catch(e){se('fErr',e.message)}finally{$('#sBtn').disabled=false}
 }
@@ -425,29 +711,28 @@ function he(id){$('#'+id).classList.remove('visible')}
 // --- Whisper Auto-Sync ---
 async function loadWhisperStatus(){
     if(!sel)return;
-    const st=$('#whisperStatus'),rb=$('#whisperResult'),db=$('#whisperDeleteBtn'),det=$('#whisperDetails');
+    const stEl=$('#whisperStatus'),rb=$('#whisperResult'),db=$('#whisperDeleteBtn'),det=$('#whisperDetails');
     const btn=$('#whisperStartBtn');
-    st.innerHTML='';det.style.display='none';db.style.display='none';
+    stEl.innerHTML='';det.style.display='none';db.style.display='none';
     try{
-        const r=await fetch(`/api/chapter-mapping/${sel.id}`);
+        const r=await fetch('/api/chapter-mapping/'+sel.id);
         if(!r.ok)return;
         const d=await r.json();
         const wa=d.whisper_anchor_points||[];
         if(wa.length>0){
-            st.innerHTML=`<span class="badge badge-green">Whisper-Sync: ${wa.length} Ankerpunkte</span> <span class="cal-hint">(dauerhaft gespeichert)</span>`;
+            stEl.innerHTML='<span class="badge badge-green">Whisper-Sync: '+wa.length+' Ankerpunkte</span> <span class="cal-hint">(gespeichert)</span>';
             db.style.display='';
             btn.textContent='Neu starten';
-            // Show anchor details in collapsible
-            let html='<table style="width:100%;font-size:.85rem;border-collapse:collapse"><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:.2rem .5rem">Audio-Zeit</th><th style="text-align:left;padding:.2rem .5rem">Confidence</th><th style="text-align:left;padding:.2rem .5rem">Text</th></tr>';
+            let html='<div style="overflow-x:auto"><table style="width:100%;font-size:.78rem;border-collapse:collapse"><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:.2rem .4rem">Zeit</th><th style="text-align:left;padding:.2rem .4rem">Conf.</th><th style="text-align:left;padding:.2rem .4rem">Text</th></tr>';
             wa.forEach(a=>{
                 const min=Math.floor(a.audio_seconds/60),sec=Math.round(a.audio_seconds%60);
                 const conf=a.confidence>=0.7?'badge-green':a.confidence>=0.5?'badge-amber':'';
-                html+=`<tr style="border-bottom:1px solid var(--border)"><td style="padding:.2rem .5rem">${min}:${String(sec).padStart(2,'0')}</td><td style="padding:.2rem .5rem"><span class="badge ${conf}">${(a.confidence*100).toFixed(0)}%</span></td><td style="padding:.2rem .5rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(a.whisper_text||'').replace(/"/g,'&quot;')}">${a.whisper_text||''}</td></tr>`;
+                html+='<tr style="border-bottom:1px solid var(--border)"><td style="padding:.2rem .4rem">'+min+':'+String(sec).padStart(2,'0')+'</td><td style="padding:.2rem .4rem"><span class="badge '+conf+'">'+(a.confidence*100).toFixed(0)+'%</span></td><td style="padding:.2rem .4rem;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(a.whisper_text||'').replace(/"/g,'&quot;')+'">'+(a.whisper_text||'')+'</td></tr>';
             });
-            html+='</table>';
+            html+='</table></div>';
             rb.innerHTML=html;det.style.display='';
         }else{
-            st.innerHTML='<span class="cal-hint">Noch kein Whisper-Sync durchgeführt.</span>';
+            stEl.innerHTML='<span class="cal-hint">Noch kein Whisper-Sync durchgeführt.</span>';
             btn.textContent='Auto-Sync starten';
         }
     }catch(e){}
@@ -457,9 +742,9 @@ async function startWhisperSync(){
     if(!sel)return;
     const btn=$('#whisperStartBtn'),prog=$('#whisperProgress'),pt=$('#whisperProgressText'),det=$('#whisperDetails');
     btn.disabled=true;prog.style.display='';det.style.display='none';
-    pt.textContent='Segmente werden extrahiert und transkribiert...';
+    pt.textContent='Segmente werden transkribiert...';
     try{
-        const r=await fetch(`/api/whisper-sync/${sel.id}`,{
+        const r=await fetch('/api/whisper-sync/'+sel.id,{
             method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({
@@ -471,28 +756,37 @@ async function startWhisperSync(){
         const d=await r.json();
         prog.style.display='none';
         if(!r.ok){
-            $('#whisperStatus').innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Fehler: ${d.detail||'Unbekannt'}</span>`;
+            $('#whisperStatus').innerHTML='<span class="badge" style="background:#c0392b;color:#fff">Fehler: '+(d.detail||'Unbekannt')+'</span>';
             return;
         }
-        // Reload status (shows anchors in collapsible) and position
-        loadWhisperStatus();
-        loadPos();
+        loadWhisperStatus();loadPos();
     }catch(e){
         prog.style.display='none';
-        $('#whisperStatus').innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Netzwerk-Fehler</span>`;
-    }finally{
-        btn.disabled=false;
-    }
+        $('#whisperStatus').innerHTML='<span class="badge" style="background:#c0392b;color:#fff">Netzwerk-Fehler</span>';
+    }finally{btn.disabled=false}
 }
 
 async function deleteWhisperSync(){
     if(!sel||!confirm('Whisper-Ankerpunkte löschen?'))return;
-    try{
-        await fetch(`/api/whisper-sync/${sel.id}`,{method:'DELETE'});
-        loadWhisperStatus();
-        loadPos();
-    }catch(e){}
+    try{await fetch('/api/whisper-sync/'+sel.id,{method:'DELETE'});loadWhisperStatus();loadPos()}catch(e){}
 }
+
+// Swipe down to close sheet
+(function(){
+    let startY=0,dragging=false;
+    const sheet=$('#sheet');
+    sheet.addEventListener('touchstart',e=>{
+        const t=e.touches[0];
+        const body=sheet.querySelector('.sheet-body');
+        if(body.scrollTop<=0){startY=t.clientY;dragging=true}
+    },{passive:true});
+    sheet.addEventListener('touchmove',e=>{
+        if(!dragging)return;
+        const dy=e.touches[0].clientY-startY;
+        if(dy>80){dragging=false;closeSheet()}
+    },{passive:true});
+    sheet.addEventListener('touchend',()=>{dragging=false},{passive:true});
+})();
 </script>
 </body>
 </html>

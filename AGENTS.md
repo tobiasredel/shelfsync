@@ -7,7 +7,7 @@
 1. **Recap** – Summarize a missed audiobook segment (e.g. "what happened between minute 45 and 55?") using EPUB text + GPT-4o-mini
 2. **Position Sync** – Show which Kindle page / percentage corresponds to the current audio position
 3. **Find & Jump** – Enter a Kindle page number or text passage → get the audio timestamp → optionally update the ABS listening position
-4. **Search & Favorites** – Filter the book list by title/author as you type; star books to pin them at the top, persisted across sessions
+4. **Currently Reading** – Mark one book as "currently reading"; it appears as a hero card at the top and is auto-selected on page load
 
 The key insight is that EPUB text extraction replaces expensive Speech-to-Text (Whisper), making the tool ~14x cheaper (~$0.005 vs $0.07 per recap).
 
@@ -52,7 +52,7 @@ The key insight is that EPUB text extraction replaces expensive Speech-to-Text (
 | LLM | OpenAI API (gpt-4o-mini default) |
 | Frontend | Vanilla HTML/CSS/JS (single file, no build step) |
 | Fonts | Google Fonts: DM Sans + DM Serif Display |
-| Persistence | JSON files in `DATA_DIR` (`calibration.json`, `favorites.json`, `epub_cache/`) |
+| Persistence | JSON files in `DATA_DIR` (`calibration.json`, `currently_reading.json`, `epub_cache/`) |
 | Deployment | Docker, docker-compose, targeted at Synology NAS |
 
 ## File Structure
@@ -76,9 +76,11 @@ audiobook-recap/
 - Text is mapped to audio position via ABS chapter markers
 - Fallback: proportional mapping (char position ≈ time ratio) when chapters don't align
 
-### Single-file Frontend
+### Single-file Frontend (Mobile-first PWA)
 - No build tools, no npm, no React – just one HTML file with embedded CSS/JS
-- Dark theme, mobile-responsive, designed for sleepy users
+- **Mobile-first design**: feels like a native iPhone app (PWA meta tags, safe area insets, touch-friendly 44px tap targets, swipe-to-close bottom sheet, no zoom on input focus)
+- Dark theme, designed for sleepy users
+- Book detail opens in a bottom sheet overlay (swipeable)
 - All API calls use fetch() with JSON
 
 ### Per-book Kindle Calibration
@@ -88,11 +90,12 @@ audiobook-recap/
 - Sanity-bounded to 50–600 words/page
 - Default fallback: 250 words/page
 
-### Favorites Persistence
-- Stored as a flat `list[str]` of item IDs in `/data/favorites.json`
+### Currently Reading Persistence
+- Stored as `{"item_id": "..."}` in `/data/currently_reading.json` (single book, not a list)
 - Thread-safe via `_favorites_lock` (same pattern as calibrations)
-- Frontend sorts favorites to the top, then alphabetical within each group
-- Search filters across both favorited and non-favorited books
+- Frontend shows the currently-reading book as a hero card at the top
+- Auto-selected on page load; tapping the card opens its bottom sheet
+- Setting a new book as "currently reading" replaces the previous one
 
 ### EPUB Cache (Memory + Disk)
 - `_epub_cache` (OrderedDict) holds parsed EPUB chapters in memory, keyed by item_id
@@ -109,7 +112,7 @@ audiobook-recap/
 | `OPENAI_API_KEY` | ✅ | – | OpenAI API key (for GPT-4o-mini) |
 | `LLM_MODEL` | – | `gpt-4o-mini` | OpenAI model for summaries |
 | `SUMMARY_LANGUAGE` | – | `de` | Summary language (`de`, `en`) |
-| `DATA_DIR` | – | `/data` | Path for calibration.json, favorites.json, epub_cache/ |
+| `DATA_DIR` | – | `/data` | Path for calibration.json, currently_reading.json, epub_cache/ |
 | `EPUB_MAX_SIZE_MB` | – | `100` | Max EPUB download size in MB |
 | `AUTH_USER` | – | – | Basic auth username (leave empty to disable auth) |
 | `AUTH_PASS` | – | – | Basic auth password |
@@ -117,7 +120,7 @@ audiobook-recap/
 ## API Endpoints Reference
 
 ### `GET /api/books`
-Returns all library items with `has_epub`, `is_calibrated`, and `is_favorite` flags.
+Returns all library items with `has_epub`, `is_calibrated`, and `is_currently_reading` flags. Uses the ABS library listing endpoint directly (no N+1 individual item fetches) for fast loading.
 
 ### `GET /api/books/{item_id}/chapters`
 Returns audio chapter markers (title, start, end in seconds).
@@ -159,11 +162,14 @@ Returns auto-detected chapter mapping, anchor points, matched/unmatched chapters
 ### `DELETE /api/calibration/{item_id}`
 Resets calibration to default.
 
-### `POST /api/favorites/{item_id}`
-Adds the book to the favorites list. Returns `{is_favorite: true}`. Idempotent.
+### `POST /api/currently-reading/{item_id}`
+Sets this book as the currently-reading book (replaces any previous). Returns `{is_currently_reading: true, item_id}`.
 
-### `DELETE /api/favorites/{item_id}`
-Removes the book from the favorites list. Returns `{is_favorite: false}`. Idempotent.
+### `DELETE /api/currently-reading`
+Clears the currently-reading book. Returns `{is_currently_reading: false, item_id: null}`.
+
+### `GET /api/currently-reading`
+Returns `{item_id}` of the currently-reading book, or `{item_id: null}`.
 
 ### `POST /api/sync-progress?library_item_id=...&time_seconds=...`
 Updates the user's listening position in Audiobookshelf via `PATCH /api/me/progress/{id}`.
@@ -277,7 +283,7 @@ Reverse of above: interpolate char position to time via anchors, or fallback to 
 - [x] **EPUB cache persistence**: Disk cache in `DATA_DIR/epub_cache/{item_id}.json`, with LRU in-memory layer.
 - [x] **Support multiple EPUB files per book**: `_find_epub_file()` checks both `ebookFile` and `libraryFiles`.
 - [x] **Basic auth**: Optional HTTP Basic auth via `AUTH_USER`/`AUTH_PASS` env vars.
-- [x] **Search & Favorites**: Filter books by title/author; star books to pin them at the top.
+- [x] **Search & Currently Reading**: Filter books by title/author; mark one book as "currently reading" with auto-select on page load.
 - [x] **LLM retry with backoff**: `_call_llm()` retries transient errors with exponential backoff.
 - [x] **Model-aware text chunking**: Long texts are split into chunks based on model context window, summarized in parallel, then merged.
 
@@ -289,7 +295,7 @@ Reverse of above: interpolate char position to time via anchors, or fallback to 
 - [ ] **Bookmark integration**: Read/write ABS bookmarks for "I fell asleep here" markers.
 - [ ] **History**: Store past recaps so users can review what was summarized.
 - [ ] **Alternative LLM support**: Add Anthropic Claude, Ollama, or local LLM support as alternatives to OpenAI.
-- [ ] **Mobile PWA**: Add manifest.json and service worker for installable PWA.
+- [x] **Mobile PWA**: Mobile-first redesign with PWA meta tags, bottom sheet UI, safe area insets, touch-optimized interactions.
 - [ ] **Localization**: UI is German-only; add i18n support.
 - [ ] **Tests**: pytest for EPUB parsing, mapping logic, and API endpoints.
 - [ ] **Split app.py**: Once the file grows beyond ~500 lines, split into modules (epub.py, mapping.py, abs_client.py, routes.py).
