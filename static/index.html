@@ -411,11 +411,20 @@
             <div class="pos-chapter" id="pChName"></div>
             <div class="pos-nearby" id="pNear"></div>
             <div class="pos-cal-status" id="pCalStatus"></div>
-            <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
-                <span style="font-size:.75rem;color:var(--text-muted)">Kindle-Seiten:</span>
-                <input type="number" id="pKindlePages" min="1" placeholder="z.B. 375" style="width:80px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
-                <button id="pKindleSave" onclick="saveKindlePages()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Setzen</button>
-                <span id="pKindleOk" style="font-size:.72rem;color:var(--green);display:none">Gespeichert</span>
+            <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border)">
+                <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem">
+                    <span style="font-size:.75rem;color:var(--text-muted)">Kindle-Seiten gesamt:</span>
+                    <input type="number" id="pKindlePages" min="1" placeholder="z.B. 375" style="width:80px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
+                    <button onclick="saveKindlePages()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Setzen</button>
+                    <span id="pKindleOk" style="font-size:.72rem;color:var(--green);display:none">Gespeichert</span>
+                </div>
+                <div id="pKindleCalibrateRow" style="display:none;align-items:center;gap:.5rem;flex-wrap:wrap">
+                    <span style="font-size:.75rem;color:var(--text-muted)">Aktuelle Kindle-Seite:</span>
+                    <input type="number" id="pKindleCurPage" min="1" placeholder="Seite jetzt" style="width:90px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
+                    <button onclick="calibrateKindle()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Abgleichen</button>
+                    <span id="pCalOk" style="font-size:.72rem;color:var(--green);display:none"></span>
+                </div>
+                <div id="pCalInfo" style="display:none;margin-top:.3rem;font-size:.7rem;color:var(--text-muted)"></div>
             </div>
         </div>
 
@@ -755,11 +764,23 @@ async function loadPos(){
             :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync</span>';
         $('#posBox').classList.add('visible');
         $('#pgTotal').textContent='von '+d.total_pages;
-        // Load stored Kindle page count
+        // Load stored Kindle settings
         try{
             const kp=await(await fetch('/api/books/'+encodeURIComponent(sel.id)+'/kindle-pages')).json();
-            if(kp.kindle_pages) $('#pKindlePages').value=kp.kindle_pages;
-            else $('#pKindlePages').value='';
+            if(kp.kindle_pages){
+                $('#pKindlePages').value=kp.kindle_pages;
+                $('#pKindleCalibrateRow').style.display='flex';
+            }else{
+                $('#pKindlePages').value='';
+                $('#pKindleCalibrateRow').style.display='none';
+            }
+            const pts=kp.kindle_calibration_points||[];
+            if(pts.length>0){
+                $('#pCalInfo').style.display='';
+                $('#pCalInfo').textContent=pts.length+' Kalibrierungspunkt'+(pts.length>1?'e':'')+' gespeichert';
+            }else{
+                $('#pCalInfo').style.display='none';
+            }
         }catch(e){}
     }catch(e){$('#posBox').classList.remove('visible')}
 }
@@ -772,7 +793,24 @@ async function saveKindlePages(){
         await fetch('/api/books/'+encodeURIComponent(sel.id)+'/kindle-pages?pages='+pages,{method:'PUT'});
         $('#pKindleOk').style.display='';
         setTimeout(()=>$('#pKindleOk').style.display='none',2000);
-        // Clear cached position so loadPos fetches fresh data
+        $('#pKindleCalibrateRow').style.display='flex';
+        if(detailsCache[sel.id]) delete detailsCache[sel.id].position;
+        loadPos();
+    }catch(e){}
+}
+
+async function calibrateKindle(){
+    if(!sel)return;
+    const page=parseInt($('#pKindleCurPage').value);
+    if(!page||page<1)return;
+    try{
+        const r=await(await fetch('/api/books/'+encodeURIComponent(sel.id)+'/kindle-calibrate',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({current_kindle_page:page,current_time_seconds:sel.current_time})
+        })).json();
+        $('#pCalOk').style.display='';
+        $('#pCalOk').textContent='Kalibriert ('+r.total_points+' Punkt'+(r.total_points>1?'e':'')+')';
+        setTimeout(()=>$('#pCalOk').style.display='none',3000);
         if(detailsCache[sel.id]) delete detailsCache[sel.id].position;
         loadPos();
     }catch(e){}

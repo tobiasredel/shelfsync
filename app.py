@@ -1253,8 +1253,78 @@ async def set_kindle_pages(item_id: str, pages: int):
 @app.get("/api/books/{item_id}/kindle-pages")
 async def get_kindle_pages(item_id: str):
     cal = load_calibrations()
-    pages = (cal.get(item_id) or {}).get("kindle_pages")
-    return {"item_id": item_id, "kindle_pages": pages}
+    entry = cal.get(item_id) or {}
+    return {
+        "item_id": item_id,
+        "kindle_pages": entry.get("kindle_pages"),
+        "kindle_calibration_points": entry.get("kindle_calibration_points", []),
+    }
+
+
+class KindleCalibrateRequest(BaseModel):
+    current_kindle_page: int
+    current_time_seconds: float
+
+
+@app.post("/api/books/{item_id}/kindle-calibrate")
+async def kindle_calibrate(item_id: str, req: KindleCalibrateRequest):
+    """Store a calibration point mapping audio position to Kindle page number."""
+    if req.current_kindle_page < 1:
+        raise HTTPException(status_code=400, detail="Seitenzahl muss >= 1 sein")
+
+    # Calculate word fraction at current audio position
+    ec, ac, dur = await get_epub_chapters(item_id)
+    full = _build_full_text(ec, item_id)
+    tw = sum(ch["word_count"] for ch in ec)
+    cp, _, _ = _time_to_char_position(ec, req.current_time_seconds, dur, item_id=item_id)
+    wb = len(full[:cp].split())
+    word_fraction = wb / max(tw, 1)
+
+    with _calibration_lock:
+        cal_path = _calibration_path()
+        cal = {}
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+        entry = cal.get(item_id, {})
+        points = entry.get("kindle_calibration_points", [])
+        # Replace existing point if close to same fraction (within 2%)
+        points = [p for p in points if abs(p["word_fraction"] - word_fraction) > 0.02]
+        points.append({
+            "word_fraction": round(word_fraction, 4),
+            "kindle_page": req.current_kindle_page,
+        })
+        points.sort(key=lambda p: p["word_fraction"])
+        entry["kindle_calibration_points"] = points
+        cal[item_id] = entry
+        cal_path.write_text(json.dumps(cal, indent=2))
+
+    return {
+        "item_id": item_id,
+        "word_fraction": round(word_fraction, 4),
+        "kindle_page": req.current_kindle_page,
+        "total_points": len(points),
+    }
+
+
+@app.delete("/api/books/{item_id}/kindle-calibrate")
+async def delete_kindle_calibration(item_id: str):
+    """Remove all calibration points for a book."""
+    with _calibration_lock:
+        cal_path = _calibration_path()
+        cal = {}
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+        entry = cal.get(item_id, {})
+        entry.pop("kindle_calibration_points", None)
+        cal[item_id] = entry
+        cal_path.write_text(json.dumps(cal, indent=2))
+    return {"status": "ok"}
 
 
 @app.post("/api/whisper-sync/{item_id}")
@@ -1425,13 +1495,33 @@ async def get_position(req: PositionRequest):
         if i != -1: s = i + 1
     i = full.rfind(" ", 0, e)
     if i != -1: e = i
-    # Use stored Kindle page count if available
+    # Use stored Kindle page count + calibration points if available
     cal_data = load_calibrations()
-    kindle_pages = (cal_data.get(req.library_item_id) or {}).get("kindle_pages")
+    book_cal = cal_data.get(req.library_item_id) or {}
+    kindle_pages = book_cal.get("kindle_pages")
+    cal_points = book_cal.get("kindle_calibration_points", [])
     if kindle_pages and kindle_pages > 0:
         tp = kindle_pages
-        wpp = tw / max(tp, 1)
-        page = max(1, min(tp, round(wb / max(wpp, 1)) + 1))
+        word_frac = wb / max(tw, 1)
+        if cal_points:
+            # Piecewise linear interpolation using calibration points
+            # Anchor points: (0, 1) at start, calibration points, (1.0, kindle_pages) at end
+            anchors = [(0.0, 1)] + [(p["word_fraction"], p["kindle_page"]) for p in cal_points] + [(1.0, kindle_pages)]
+            # Find the segment containing word_frac
+            for i in range(len(anchors) - 1):
+                f0, p0 = anchors[i]
+                f1, p1 = anchors[i + 1]
+                if word_frac <= f1 or i == len(anchors) - 2:
+                    if f1 - f0 > 0:
+                        t = (word_frac - f0) / (f1 - f0)
+                        page = max(1, min(tp, round(p0 + t * (p1 - p0))))
+                    else:
+                        page = p0
+                    break
+        else:
+            # Simple proportional mapping without calibration points
+            wpp = tw / max(tp, 1)
+            page = max(1, min(tp, round(wb / max(wpp, 1)) + 1))
 
     synced = has_whisper_sync(req.library_item_id)
     return PositionResponse(estimated_page=page, total_pages=tp, percentage=pct,
