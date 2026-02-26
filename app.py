@@ -513,7 +513,8 @@ async def get_library_items():
         cal = cal_data.get(item["id"])
         items.append({
             "id": item["id"], "title": md.get("title", "Unknown"),
-            "author": md.get("authorName", "Unknown"),
+            "author": md.get("authorName") or ", ".join(
+                a.get("name", "") for a in md.get("authors", [])) or "Unknown",
             "duration": media.get("duration", 0),
             "current_time": prog.get("currentTime", 0),
             "cover": f"/api/cover/{item['id']}",
