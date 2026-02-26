@@ -2169,7 +2169,7 @@ async def get_position(req: PositionRequest):
     wb = len(full[:cp].split())
     page = max(1, min(tp, round(wb / wpp) + 1))
     pct = round(wb / max(tw, 1) * 100, 1)
-    s, e = max(0, cp - 60), min(len(full), cp + 60)
+    s, e = max(0, cp - 200), min(len(full), cp + 200)
     if s > 0:
         i = full.find(" ", s)
         if i != -1: s = i + 1
@@ -2264,7 +2264,12 @@ async def page_to_audio(req: PageToAudioRequest):
         ac, ec, cp, dur, offset,
         item_id=req.library_item_id, manual_anchors=manual,
     )
-    s, e = max(0, cp - 60), min(len(full), cp + 60)
+    s, e = max(0, cp - 200), min(len(full), cp + 200)
+    if s > 0:
+        i = full.find(" ", s)
+        if i != -1: s = i + 1
+    i = full.rfind(" ", 0, e)
+    if i != -1: e = i
     return PageToAudioResponse(audio_timestamp_seconds=round(ts, 1),
                                audio_timestamp_formatted=_format_time(ts),
                                chapter_title=ct, nearby_text=full[s:e])
