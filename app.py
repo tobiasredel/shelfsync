@@ -12,6 +12,9 @@ import logging
 import os
 import re
 import secrets
+import shutil
+import subprocess
+import tempfile
 import threading
 import zipfile
 from collections import OrderedDict
@@ -193,6 +196,44 @@ def set_anchor_points(item_id: str, points: list[dict]):
         cal_path.write_text(json.dumps(cal, indent=2))
 
 
+def get_whisper_anchors(item_id: str) -> list[dict]:
+    """Get stored Whisper auto-sync anchors for a book."""
+    cal = load_calibrations()
+    entry = cal.get(item_id, {})
+    return entry.get("whisper_anchors", [])
+
+
+def set_whisper_anchors(item_id: str, anchors: list[dict]):
+    """Store Whisper auto-sync anchors (audio_seconds, char_position, confidence)."""
+    with _calibration_lock:
+        cal_path = _calibration_path()
+        cal = {}
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+        existing = cal.get(item_id, {})
+        existing["whisper_anchors"] = anchors
+        existing["method"] = "whisper_auto"
+        cal[item_id] = existing
+        cal_path.write_text(json.dumps(cal, indent=2))
+
+
+def _load_whisper_anchors(item_id: str) -> list[tuple[float, int]] | None:
+    """Load stored Whisper anchors as (time, char_pos) tuples."""
+    anchors = get_whisper_anchors(item_id)
+    if not anchors:
+        return None
+    result = []
+    for a in anchors:
+        t = a.get("audio_seconds", 0)
+        cp = a.get("char_position", 0)
+        if t >= 0 and cp >= 0:
+            result.append((float(t), int(cp)))
+    return result if result else None
+
+
 def _load_manual_anchors(
     item_id: str,
     epub_ch: list[dict],
@@ -227,14 +268,17 @@ def _mapping_quality_label(
     audio_ch: list[dict],
     epub_ch: list[dict],
     anchors: list[tuple[float, int]] | None = None,
+    item_id: str | None = None,
 ) -> str:
     """Return a human-readable quality label for the chapter mapping."""
     if not audio_ch or not epub_ch:
         return "legacy"
+    # Whisper anchors = highest quality automatic mapping
+    if item_id and get_whisper_anchors(item_id):
+        return "whisper"
     n_audio = len(audio_ch)
     n_matched = len(mapping)
     if n_matched == 0:
-        # Check if we have WPM-based anchors (no chapter match but still useful)
         if anchors and len(anchors) >= 3:
             return "wpm"
         return "legacy"
@@ -364,6 +408,13 @@ class MultiAnchorRequest(BaseModel):
 class SetOffsetRequest(BaseModel):
     library_item_id: str
     epub_chapter_offset: int
+
+
+class WhisperSyncRequest(BaseModel):
+    n_samples: int = 10
+    language: str = "de"
+    segment_duration: int = 20
+    force: bool = False  # Re-run even if whisper anchors exist
 
 
 # ---------------------------------------------------------------------------
@@ -898,32 +949,45 @@ def _get_anchors(
 ) -> tuple[list[tuple[float, int]], list[tuple[int, int]]]:
     """Get anchor points and chapter mapping (with caching).
 
-    Tries in order:
+    Tries in order (merging where possible):
     1. Chapter mapping anchors (title + boundary matching)
-    2. WPM-based anchors (word-count proportional, no matching needed)
-    3. Simple start/end anchors (pure linear)
+    2. Whisper auto-sync anchors (persistent, from calibration.json)
+    3. Manual anchors (from multi-point calibration)
+    4. WPM-based anchors (word-count proportional, no matching needed)
+    5. Simple start/end anchors (pure linear)
 
     Returns (anchors, mapping).
     """
     mapping = _get_chapter_mapping(audio_ch, epub_ch, offset, item_id)
     cache_key = f"{item_id}:{offset}" if item_id else None
 
-    # Don't cache if manual anchors are provided (they can change)
-    if cache_key and not manual_anchors and cache_key in _anchor_cache:
+    # Load whisper anchors (persistent, stored as char positions directly)
+    whisper_anchors = _load_whisper_anchors(item_id) if item_id else None
+
+    # Don't cache if manual or whisper anchors exist (they can change)
+    has_extra = manual_anchors or whisper_anchors
+    if cache_key and not has_extra and cache_key in _anchor_cache:
         return _anchor_cache[cache_key], mapping
 
-    anchors = _build_anchor_points(audio_ch, epub_ch, mapping, total_dur, manual_anchors)
+    # Merge all anchor sources
+    combined_manual = []
+    if whisper_anchors:
+        combined_manual.extend(whisper_anchors)
+    if manual_anchors:
+        combined_manual.extend(manual_anchors)
 
-    # If chapter matching produced too few anchors (just start+end),
-    # use WPM-based anchors as a better fallback
-    if len(anchors) <= 2 and len(epub_ch) >= 3 and not manual_anchors:
+    anchors = _build_anchor_points(
+        audio_ch, epub_ch, mapping, total_dur,
+        combined_manual if combined_manual else None,
+    )
+
+    # If still too few anchors (just start+end), use WPM-based fallback
+    if len(anchors) <= 2 and len(epub_ch) >= 3 and not has_extra:
         wpm_anchors = _build_wpm_anchors(audio_ch, epub_ch, total_dur, offset)
         if len(wpm_anchors) > len(anchors):
             anchors = wpm_anchors
-            # WPM anchors don't come from chapter matching, so mapping stays empty
-            # but we still get good interpolation
 
-    if cache_key and not manual_anchors:
+    if cache_key and not has_extra:
         _anchor_cache[cache_key] = anchors
 
     return anchors, mapping
@@ -1293,6 +1357,228 @@ async def update_abs_progress(item_id, time_sec, duration):
 
 
 # ---------------------------------------------------------------------------
+# Whisper auto-sync: audio segment extraction + transcription + text matching
+# ---------------------------------------------------------------------------
+
+def _map_global_time_to_file(
+    audio_files: list[dict], global_time: float,
+) -> tuple[dict, float]:
+    """Map a global audio time to a specific file and local offset.
+
+    audio_files must be sorted by index. Each has 'duration' in seconds.
+    Returns (audio_file_dict, local_offset_seconds).
+    """
+    cum = 0.0
+    for af in audio_files:
+        d = af.get("duration", 0)
+        if cum + d > global_time:
+            return af, global_time - cum
+        cum += d
+    # Past end — return last file at its end
+    if audio_files:
+        last = audio_files[-1]
+        return last, last.get("duration", 0)
+    raise ValueError("No audio files")
+
+
+async def _download_audio_file(item_id: str, file_ino: str) -> Path:
+    """Download a single audio file from ABS to a temp directory."""
+    tmp = Path(tempfile.gettempdir()) / "whisper_sync" / item_id
+    tmp.mkdir(parents=True, exist_ok=True)
+    cached = tmp / f"{file_ino}"
+    if cached.exists() and cached.stat().st_size > 0:
+        return cached
+    c = _client()
+    r = await c.get(
+        f"{ABS_URL}/api/items/{item_id}/file/{file_ino}/download",
+        headers=abs_headers(), timeout=300,
+    )
+    r.raise_for_status()
+    # Determine extension from content-type or default to .mp3
+    ct = r.headers.get("content-type", "")
+    ext = ".mp3"
+    if "mp4" in ct or "m4a" in ct or "m4b" in ct:
+        ext = ".m4b"
+    elif "ogg" in ct:
+        ext = ".ogg"
+    out = tmp / f"{file_ino}{ext}"
+    out.write_bytes(r.content)
+    return out
+
+
+async def _extract_audio_segment(
+    item_id: str,
+    audio_files: list[dict],
+    global_time: float,
+    duration: float = 20,
+) -> Path:
+    """Extract a short audio segment at the given global time using ffmpeg."""
+    af, local_offset = _map_global_time_to_file(audio_files, global_time)
+    ino = af.get("ino", af.get("metadata", {}).get("ino", ""))
+    src = await _download_audio_file(item_id, ino)
+
+    tmp = Path(tempfile.gettempdir()) / "whisper_sync" / item_id / "segments"
+    tmp.mkdir(parents=True, exist_ok=True)
+    out = tmp / f"seg_{global_time:.0f}.mp3"
+
+    proc = await asyncio.to_thread(
+        subprocess.run,
+        [
+            "ffmpeg", "-y", "-ss", str(local_offset), "-t", str(duration),
+            "-i", str(src), "-vn", "-acodec", "libmp3lame", "-q:a", "5",
+            str(out),
+        ],
+        capture_output=True, timeout=30,
+    )
+    if proc.returncode != 0:
+        logger.warning("ffmpeg failed: %s", proc.stderr[:500])
+        raise RuntimeError(f"ffmpeg error: {proc.stderr[:200]}")
+    return out
+
+
+def _select_sample_positions(
+    audio_ch: list[dict], total_dur: float, n_samples: int = 10,
+) -> list[float]:
+    """Select evenly-spaced sample positions, avoiding chapter boundaries."""
+    n_samples = max(3, min(n_samples, 20))
+    # Evenly spaced across the book (skip first/last 30 seconds)
+    margin = min(30, total_dur * 0.01)
+    step = (total_dur - 2 * margin) / max(n_samples - 1, 1)
+    positions = [margin + i * step for i in range(n_samples)]
+
+    # Avoid chapter boundaries (±5s) — shift samples away
+    boundaries = set()
+    for ch in audio_ch:
+        boundaries.add(ch["start"])
+        if "end" in ch:
+            boundaries.add(ch["end"])
+
+    adjusted = []
+    for pos in positions:
+        for b in boundaries:
+            if abs(pos - b) < 5:
+                # Shift 8 seconds into the chapter
+                pos = b + 8
+                break
+        pos = max(margin, min(pos, total_dur - margin))
+        adjusted.append(pos)
+
+    return adjusted
+
+
+async def _transcribe_segment(audio_path: Path, language: str = "de") -> str | None:
+    """Transcribe a short audio segment using OpenAI Whisper API."""
+    try:
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        with open(audio_path, "rb") as f:
+            resp = await client.audio.transcriptions.create(
+                model="whisper-1", file=f, language=language,
+            )
+        text = resp.text.strip() if hasattr(resp, "text") else str(resp).strip()
+        return text if text else None
+    except Exception as e:
+        logger.warning("Whisper transcription failed for %s: %s", audio_path.name, e)
+        return None
+
+
+async def _transcribe_all(
+    segments: list[Path], language: str = "de",
+) -> list[str | None]:
+    """Transcribe multiple segments in parallel (limited concurrency)."""
+    sem = asyncio.Semaphore(5)
+
+    async def _do(path: Path) -> str | None:
+        async with sem:
+            return await _transcribe_segment(path, language)
+
+    return await asyncio.gather(*(_do(s) for s in segments))
+
+
+def _normalize_for_matching(text: str) -> list[str]:
+    """Normalize text to word list for fuzzy matching."""
+    t = text.lower()
+    # Remove punctuation except hyphens within words
+    t = re.sub(r'[^\w\s\-äöüàáâèéêìíîòóôùúûß]', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t.split()
+
+
+def _find_text_in_epub(
+    whisper_text: str,
+    full_text: str,
+    expected_frac: float,
+    window: float = 0.15,
+) -> tuple[int, float] | None:
+    """Find whisper-transcribed text in EPUB full text.
+
+    Uses a sliding window on word-level with SequenceMatcher.
+    Searches within ±window fraction around expected_frac.
+
+    Returns (char_position, confidence_score) or None.
+    """
+    needle_words = _normalize_for_matching(whisper_text)
+    if len(needle_words) < 3:
+        return None
+
+    # Determine search region in char space
+    total_len = len(full_text)
+    center = int(expected_frac * total_len)
+    half_win = int(window * total_len)
+    search_start = max(0, center - half_win)
+    search_end = min(total_len, center + half_win)
+    region = full_text[search_start:search_end]
+
+    haystack_words = _normalize_for_matching(region)
+    if len(haystack_words) < len(needle_words):
+        return None
+
+    needle_str = " ".join(needle_words)
+    best_score, best_pos = 0.0, -1
+    n = len(needle_words)
+    step = max(1, n // 6)  # Slide by ~1/6 of needle length for speed
+
+    # Track character positions: we need to map word index → char offset
+    # Pre-compute word start positions in the region
+    word_char_starts: list[int] = []
+    for m in re.finditer(r'\S+', region.lower()):
+        word_char_starts.append(m.start())
+
+    for i in range(0, len(haystack_words) - n + 1, step):
+        window_str = " ".join(haystack_words[i:i + n])
+        score = SequenceMatcher(None, needle_str, window_str).ratio()
+        if score > best_score:
+            best_score = score
+            best_pos = i
+
+    if best_score < 0.45 or best_pos < 0:
+        return None
+
+    # Refine: check neighbors of best_pos with step=1
+    refined_score, refined_pos = best_score, best_pos
+    for j in range(max(0, best_pos - step), min(len(haystack_words) - n + 1, best_pos + step + 1)):
+        window_str = " ".join(haystack_words[j:j + n])
+        score = SequenceMatcher(None, needle_str, window_str).ratio()
+        if score > refined_score:
+            refined_score = score
+            refined_pos = j
+
+    # Convert word position to char position in the full text
+    if refined_pos < len(word_char_starts):
+        char_in_region = word_char_starts[refined_pos]
+        char_pos = search_start + char_in_region
+        return char_pos, refined_score
+
+    return None
+
+
+def _cleanup_whisper_temp(item_id: str):
+    """Remove temp files for a whisper sync run."""
+    tmp = Path(tempfile.gettempdir()) / "whisper_sync" / item_id
+    if tmp.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
 # Known context window sizes (tokens) for common models.
@@ -1657,6 +1943,145 @@ async def calibrate_multi_anchor(req: MultiAnchorRequest):
     }
 
 
+@app.post("/api/whisper-sync/{item_id}")
+async def whisper_sync(item_id: str, req: WhisperSyncRequest):
+    """Run Whisper auto-sync: transcribe short audio segments and find them in EPUB.
+
+    Stores results persistently in calibration.json. Only needs to run once per book.
+    """
+    # Pre-checks
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY nicht konfiguriert")
+    if not shutil.which("ffmpeg"):
+        raise HTTPException(status_code=422,
+                            detail="ffmpeg nicht gefunden. Bitte installieren: apt install ffmpeg")
+
+    # Check if already done
+    existing = get_whisper_anchors(item_id)
+    if existing and not req.force:
+        return {
+            "status": "exists",
+            "message": f"Whisper-Sync bereits durchgeführt ({len(existing)} Ankerpunkte). "
+                       "force=true zum Erneuern.",
+            "anchors": existing,
+        }
+
+    # Load book data
+    ec, ac, dur = await get_epub_chapters(item_id)
+    full_text = _build_full_text(ec, item_id)
+    if not full_text:
+        raise HTTPException(status_code=400, detail="EPUB-Text konnte nicht geladen werden")
+
+    # Get audio files from ABS item details
+    item = await get_item_details(item_id)
+    media = item.get("media", {})
+    audio_files = sorted(media.get("audioFiles", []), key=lambda f: f.get("index", 0))
+    if not audio_files:
+        raise HTTPException(status_code=400, detail="Keine Audio-Dateien gefunden")
+
+    # Select sample positions
+    positions = _select_sample_positions(ac, dur, req.n_samples)
+    logger.info("Whisper-Sync %s: %d Samples geplant", item_id[:8], len(positions))
+
+    try:
+        # Extract audio segments
+        segments: list[Path] = []
+        for i, pos in enumerate(positions):
+            logger.info("Extrahiere Segment %d/%d bei %.0fs", i + 1, len(positions), pos)
+            try:
+                seg = await _extract_audio_segment(item_id, audio_files, pos, req.segment_duration)
+                segments.append(seg)
+            except Exception as e:
+                logger.warning("Segment-Extraktion fehlgeschlagen bei %.0fs: %s", pos, e)
+                segments.append(None)
+
+        # Transcribe all segments
+        valid_segments = [s for s in segments if s is not None]
+        logger.info("Transkribiere %d Segmente", len(valid_segments))
+        transcriptions_raw = await _transcribe_all(valid_segments, req.language)
+
+        # Map back to positions (filling None for failed extractions)
+        transcriptions: list[str | None] = []
+        t_idx = 0
+        for s in segments:
+            if s is not None:
+                transcriptions.append(transcriptions_raw[t_idx])
+                t_idx += 1
+            else:
+                transcriptions.append(None)
+
+        # Match each transcription in EPUB text
+        anchors: list[dict] = []
+        failed: list[int] = []
+
+        for i, (pos, text) in enumerate(zip(positions, transcriptions)):
+            if text is None:
+                failed.append(i)
+                continue
+            expected_frac = pos / max(dur, 1)
+            result = _find_text_in_epub(text, full_text, expected_frac)
+            if result is None:
+                failed.append(i)
+                logger.info("Sample %d (%.0fs): kein Match im EPUB", i, pos)
+                continue
+
+            char_pos, confidence = result
+            anchors.append({
+                "audio_seconds": round(pos, 1),
+                "char_position": char_pos,
+                "confidence": round(confidence, 3),
+                "whisper_text": text[:100],
+            })
+            logger.info("Sample %d (%.0fs): Match bei char %d (confidence %.2f)",
+                        i, pos, char_pos, confidence)
+
+        # Store persistently
+        if anchors:
+            set_whisper_anchors(item_id, anchors)
+            # Clear caches
+            for key in list(_anchor_cache):
+                if key.startswith(f"{item_id}:"):
+                    del _anchor_cache[key]
+
+        return {
+            "status": "ok",
+            "total_samples": len(positions),
+            "matched": len(anchors),
+            "failed_samples": failed,
+            "anchors": anchors,
+            "cost_seconds": len(valid_segments) * req.segment_duration,
+        }
+
+    finally:
+        _cleanup_whisper_temp(item_id)
+
+
+@app.delete("/api/whisper-sync/{item_id}")
+async def delete_whisper_sync(item_id: str):
+    """Delete stored Whisper anchors for a book."""
+    with _calibration_lock:
+        cal_path = _calibration_path()
+        cal = {}
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+        entry = cal.get(item_id, {})
+        entry.pop("whisper_anchors", None)
+        if entry.get("method") == "whisper_auto":
+            entry.pop("method", None)
+        cal[item_id] = entry
+        cal_path.write_text(json.dumps(cal, indent=2))
+
+    # Clear caches
+    for key in list(_anchor_cache):
+        if key.startswith(f"{item_id}:"):
+            del _anchor_cache[key]
+
+    return {"status": "deleted"}
+
+
 @app.get("/api/chapter-mapping/{item_id}")
 async def get_chapter_mapping_endpoint(item_id: str):
     """Show the auto-detected chapter mapping and anchor points.
@@ -1712,7 +2137,7 @@ async def get_chapter_mapping_endpoint(item_id: str):
     ]
 
     return {
-        "quality": _mapping_quality_label(mapping, ac, ec, anchors),
+        "quality": _mapping_quality_label(mapping, ac, ec, anchors, item_id),
         "matched_count": len(mapping),
         "audio_chapter_count": len(ac),
         "epub_chapter_count": len(ec),
@@ -1723,6 +2148,7 @@ async def get_chapter_mapping_endpoint(item_id: str):
         "anchor_count": len(anchors),
         "anchors": [{"time": round(t, 1), "char_pos": c} for t, c in anchors],
         "manual_anchor_points": get_anchor_points(item_id),
+        "whisper_anchor_points": get_whisper_anchors(item_id),
     }
 
 
@@ -1757,7 +2183,7 @@ async def get_position(req: PositionRequest):
                             nearby_text=full[s:e],
                             is_calibrated=get_words_per_page(req.library_item_id) is not None,
                             words_per_page=wpp,
-                            mapping_quality=_mapping_quality_label(mapping, ac, ec, pos_anchors),
+                            mapping_quality=_mapping_quality_label(mapping, ac, ec, pos_anchors, req.library_item_id),
                             matched_chapters=len(mapping))
 
 
