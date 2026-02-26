@@ -460,11 +460,9 @@ def map_time_to_text(audio_ch, epub_ch, start_sec, end_sec, offset: int = 0):
         ps, pe = max(0, (start_sec - cs) / d), min(1, (end_sec - cs) / d)
         t = e["text"]; c0, c1 = int(len(t) * ps), int(len(t) * pe)
         if c0 > 0:
-            idx = t.find(" ", c0)
-            if idx != -1 and idx - c0 < 50: c0 = idx + 1
+            c0 = _snap_to_sentence_start(t, c0)
         if c1 < len(t):
-            idx = t.rfind(" ", 0, c1)
-            if idx != -1: c1 = idx
+            c1 = _snap_to_sentence_end(t, c1)
         p = t[c0:c1]
         if p.strip():
             parts.append(p); names.append(a.get("title", e["title"]))
@@ -478,10 +476,10 @@ def _pfb(ec, ss, es, td):
     if td <= 0: td = 1
     ft = " ".join(c["text"] for c in ec)
     c0, c1 = int(len(ft) * ss / td), int(len(ft) * es / td)
-    i = ft.find(" ", c0)
-    if i != -1 and i - c0 < 100: c0 = i + 1
-    i = ft.rfind(" ", 0, c1)
-    if i != -1: c1 = i
+    if c0 > 0:
+        c0 = _snap_to_sentence_start(ft, c0)
+    if c1 < len(ft):
+        c1 = _snap_to_sentence_end(ft, c1)
     return ft[c0:c1], ["(geschätzt)"]
 
 
@@ -663,8 +661,57 @@ def _max_chunk_chars() -> int:
     return max(4000, usable_tokens * _CHARS_PER_TOKEN)
 
 
+# Matches sentence-ending punctuation optionally followed by closing quotes/parens.
+_SENTENCE_END_RE = re.compile(r'[.!?][»«""\'\)]*')
+
+
+def _snap_to_sentence_start(text: str, pos: int, max_search: int = 500) -> int:
+    """Snap *pos* forward to the beginning of the next sentence.
+
+    Searches up to *max_search* characters ahead for a sentence-ending
+    punctuation mark followed by whitespace, then returns the position of the
+    first non-whitespace character after it (i.e. the start of the next
+    sentence).  Falls back to a simple word-boundary snap when no sentence
+    boundary is found.
+    """
+    search_end = min(len(text), pos + max_search)
+    m = _SENTENCE_END_RE.search(text, pos, search_end)
+    if m:
+        new_pos = m.end()
+        # skip whitespace to reach the actual start of the next sentence
+        while new_pos < len(text) and text[new_pos] in " \t\n\r":
+            new_pos += 1
+        return new_pos
+    # fallback: snap to next word boundary
+    idx = text.find(" ", pos)
+    if idx != -1 and idx - pos < max_search:
+        return idx + 1
+    return pos
+
+
+def _snap_to_sentence_end(text: str, pos: int, max_search: int = 500) -> int:
+    """Snap *pos* backward to the end of the last complete sentence.
+
+    Searches up to *max_search* characters back for sentence-ending punctuation
+    (including optional closing quotes) and returns the position right after it.
+    Falls back to a simple word-boundary snap when no sentence boundary is
+    found.
+    """
+    search_start = max(0, pos - max_search)
+    last_end = -1
+    for m in _SENTENCE_END_RE.finditer(text, search_start, pos):
+        last_end = m.end()
+    if last_end > search_start:
+        return last_end
+    # fallback: snap to previous word boundary
+    idx = text.rfind(" ", 0, pos)
+    if idx != -1:
+        return idx
+    return pos
+
+
 def _split_into_chunks(text: str, max_chars: int | None = None) -> list[str]:
-    """Split text into chunks of at most *max_chars*, breaking at word boundaries."""
+    """Split text into chunks of at most *max_chars*, preferring sentence boundaries."""
     if max_chars is None:
         max_chars = _max_chunk_chars()
     if len(text) <= max_chars:
@@ -676,12 +723,18 @@ def _split_into_chunks(text: str, max_chars: int | None = None) -> list[str]:
         if end >= len(text):
             chunks.append(text[start:])
             break
-        # find last space before the limit so we don't split mid-word
-        idx = text.rfind(" ", start, end)
+        # prefer splitting at a sentence boundary
+        idx = _snap_to_sentence_end(text, end, max_search=max_chars // 2)
         if idx <= start:
-            idx = end  # no space found – hard break (unlikely for prose)
+            # no sentence boundary – fall back to word boundary
+            idx = text.rfind(" ", start, end)
+            if idx <= start:
+                idx = end  # no space found – hard break (unlikely for prose)
         chunks.append(text[start:idx])
-        start = idx + 1  # skip the space
+        # skip whitespace before the next chunk
+        while idx < len(text) and text[idx] in " \t\n\r":
+            idx += 1
+        start = idx
     return chunks
 
 
