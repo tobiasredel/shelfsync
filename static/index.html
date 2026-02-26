@@ -164,7 +164,6 @@
         <div class="pos-row">
             <div class="pos-item"><div class="pos-value" id="pPage">–</div><div class="pos-label">Seite</div></div>
             <div class="pos-item"><div class="pos-value" id="pPct">–</div><div class="pos-label">Prozent</div></div>
-            <div class="pos-item"><div class="pos-value" id="pCh">–</div><div class="pos-label">Kapitelfortschritt</div></div>
         </div>
         <div class="pos-chapter" id="pChName"></div>
         <div class="pos-nearby" id="pNear"></div>
@@ -390,7 +389,7 @@ async function loadPos(){
         const d=await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({library_item_id:sel.id,current_time_seconds:sel.current_time})})).json();
         $('#pPage').textContent=`${d.estimated_page} / ${d.total_pages}`;
-        $('#pPct').textContent=`${d.percentage}%`;$('#pCh').textContent=`${d.chapter_progress_pct}%`;
+        $('#pPct').textContent=`${d.percentage}%`;
         $('#pChName').textContent=d.chapter_title?`📖 ${d.chapter_title}`:'';
         $('#pNear').textContent=d.nearby_text?`„${d.nearby_text}"`:'';
         const mqBadge = d.mapping_quality==='whisper'
