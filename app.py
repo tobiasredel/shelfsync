@@ -123,79 +123,6 @@ def save_calibrations(data: dict):
         _calibration_path().write_text(json.dumps(data, indent=2))
 
 
-def get_words_per_page(item_id: str) -> Optional[float]:
-    cal = load_calibrations()
-    entry = cal.get(item_id)
-    if entry:
-        return entry.get("words_per_page")
-    return None
-
-
-def get_chapter_offset(item_id: str) -> int:
-    cal = load_calibrations()
-    entry = cal.get(item_id)
-    if entry:
-        return entry.get("epub_chapter_offset", 0)
-    return 0
-
-
-def set_calibration(item_id: str, words_per_page: float, method: str, details: dict = None):
-    with _calibration_lock:
-        cal_path = _calibration_path()
-        cal = {}
-        if cal_path.exists():
-            try:
-                cal = json.loads(cal_path.read_text())
-            except Exception:
-                pass
-        existing = cal.get(item_id, {})
-        existing.update({
-            "words_per_page": round(words_per_page, 1),
-            "method": method,
-            **(details or {}),
-        })
-        cal[item_id] = existing
-        cal_path.write_text(json.dumps(cal, indent=2))
-
-
-def set_chapter_offset(item_id: str, offset: int):
-    with _calibration_lock:
-        cal_path = _calibration_path()
-        cal = {}
-        if cal_path.exists():
-            try:
-                cal = json.loads(cal_path.read_text())
-            except Exception:
-                pass
-        existing = cal.get(item_id, {})
-        existing["epub_chapter_offset"] = max(0, offset)
-        cal[item_id] = existing
-        cal_path.write_text(json.dumps(cal, indent=2))
-
-
-def get_anchor_points(item_id: str) -> list[dict]:
-    """Get stored multi-point calibration anchors for a book."""
-    cal = load_calibrations()
-    entry = cal.get(item_id, {})
-    return entry.get("anchor_points", [])
-
-
-def set_anchor_points(item_id: str, points: list[dict]):
-    """Store multi-point calibration anchors for a book."""
-    with _calibration_lock:
-        cal_path = _calibration_path()
-        cal = {}
-        if cal_path.exists():
-            try:
-                cal = json.loads(cal_path.read_text())
-            except Exception:
-                pass
-        existing = cal.get(item_id, {})
-        existing["anchor_points"] = points
-        cal[item_id] = existing
-        cal_path.write_text(json.dumps(cal, indent=2))
-
-
 def get_whisper_anchors(item_id: str) -> list[dict]:
     """Get stored Whisper auto-sync anchors for a book."""
     cal = load_calibrations()
@@ -234,49 +161,9 @@ def _load_whisper_anchors(item_id: str) -> list[tuple[float, int]] | None:
     return result if result else None
 
 
-def _load_manual_anchors(
-    item_id: str,
-    epub_ch: list[dict],
-    wpp: float,
-) -> list[tuple[float, int]] | None:
-    """Convert stored (audio_seconds, kindle_page) pairs to (time, char_pos) tuples."""
-    points = get_anchor_points(item_id)
-    if not points:
-        return None
-    full_text = _build_full_text(epub_ch, item_id)
-    anchors: list[tuple[float, int]] = []
-    for p in points:
-        t = p["audio_seconds"]
-        page = p["kindle_page"]
-        # Convert page to approximate character position via word count
-        word_target = (page - 1) * wpp
-        wc, cp = 0, 0
-        for i, ch in enumerate(full_text):
-            if ch == ' ':
-                wc += 1
-            if wc >= word_target:
-                cp = i
-                break
-        else:
-            cp = len(full_text) - 1
-        anchors.append((float(t), cp))
-    return anchors if anchors else None
-
-
-def _mapping_quality_label(
-    mapping: list[tuple[int, int]],
-    audio_ch: list[dict],
-    epub_ch: list[dict],
-    anchors: list[tuple[float, int]] | None = None,
-    item_id: str | None = None,
-) -> str:
-    """Return a human-readable quality label for the mapping.
-
-    Whisper-only: returns 'whisper' if synced, 'none' otherwise.
-    """
-    if item_id and get_whisper_anchors(item_id):
-        return "whisper"
-    return "none"
+def has_whisper_sync(item_id: str) -> bool:
+    """Check if a book has Whisper-Sync anchors."""
+    return bool(get_whisper_anchors(item_id))
 
 
 # ---------------------------------------------------------------------------
@@ -339,31 +226,6 @@ class PositionResponse(BaseModel):
     matched_chapters: int = 0
 
 
-class CalibrateByPageRequest(BaseModel):
-    """User says: 'I'm on page X and my audio is at Y seconds'"""
-    library_item_id: str
-    kindle_page: int
-    audio_time_seconds: float
-
-
-class CalibrateByTotalRequest(BaseModel):
-    """User says: 'My Kindle shows X total pages for this book'"""
-    library_item_id: str
-    total_kindle_pages: int
-
-
-class CalibrateByWppRequest(BaseModel):
-    """User sets words-per-page directly."""
-    library_item_id: str
-    words_per_page: float
-
-
-class CalibrateResponse(BaseModel):
-    words_per_page: float
-    total_pages: int
-    method: str
-
-
 class TextSearchRequest(BaseModel):
     library_item_id: str
     query: str
@@ -387,22 +249,6 @@ class PageToAudioResponse(BaseModel):
     audio_timestamp_formatted: str
     chapter_title: str
     nearby_text: str
-
-
-class AnchorPoint(BaseModel):
-    audio_seconds: float
-    kindle_page: int
-
-
-class MultiAnchorRequest(BaseModel):
-    """Multi-point calibration: multiple (audio_time, kindle_page) pairs."""
-    library_item_id: str
-    points: list[AnchorPoint]
-
-
-class SetOffsetRequest(BaseModel):
-    library_item_id: str
-    epub_chapter_offset: int
 
 
 class WhisperSyncRequest(BaseModel):
@@ -488,8 +334,6 @@ def _extract_heading(html_bytes: bytes) -> Optional[str]:
 # Mapping helpers – anchor-point based (v2)
 # ---------------------------------------------------------------------------
 _full_text_cache: dict[str, str] = {}
-_chapter_mapping_cache: dict[str, list[tuple[int, int]]] = {}
-_anchor_cache: dict[str, list[tuple[float, int]]] = {}
 
 
 def _build_full_text(ec, item_id: str | None = None) -> str:
@@ -501,9 +345,6 @@ def _build_full_text(ec, item_id: str | None = None) -> str:
     return ft
 
 
-def _total_words(ec): return sum(ch["word_count"] for ch in ec)
-
-
 def _epub_char_starts(epub_ch) -> list[int]:
     """Cumulative character start position for each EPUB chapter."""
     starts = []
@@ -512,380 +353,6 @@ def _epub_char_starts(epub_ch) -> list[int]:
         starts.append(cum)
         cum += e["char_count"] + 1  # +1 for space between chapters
     return starts
-
-
-# --- Legacy index-based mapping (used as fallback) ---
-
-def _audio_to_epub_idx(audio_idx: int, n_audio: int, n_epub: int, offset: int = 0) -> int:
-    """Map audio chapter index → EPUB chapter index, scaling proportionally."""
-    if n_epub <= 0:
-        return 0
-    if n_audio <= 1:
-        idx = offset
-    elif n_audio == n_epub:
-        idx = audio_idx + offset
-    else:
-        idx = round(audio_idx * max(n_epub - 1, 1) / max(n_audio - 1, 1)) + offset
-    return max(0, min(idx, n_epub - 1))
-
-
-def _epub_to_audio_idx(epub_idx: int, n_audio: int, n_epub: int, offset: int = 0) -> int:
-    """Reverse: map EPUB chapter index → audio chapter index."""
-    if n_audio <= 0:
-        return 0
-    adj = epub_idx - offset
-    if n_audio == n_epub:
-        idx = adj
-    elif n_epub <= 1:
-        idx = 0
-    else:
-        idx = round(adj * max(n_audio - 1, 1) / max(n_epub - 1, 1))
-    return max(0, min(idx, n_audio - 1))
-
-
-# --- Chapter title matching ---
-
-_CHAPTER_PREFIX_RE = re.compile(
-    r'^(chapter|kapitel|teil|part|abschnitt|prologue?|epilogue?|prolog|epilog)'
-    r'\s*[\d.:;,\-–—ivxlcIVXLC]*\s*[-–—:.\s]*',
-    re.IGNORECASE,
-)
-_CHAPTER_NUM_RE = re.compile(
-    r'(?:chapter|kapitel|teil|part|abschnitt)\s*(\d+)',
-    re.IGNORECASE,
-)
-_ROMAN_RE = re.compile(
-    r'(?:chapter|kapitel|teil|part|abschnitt)\s+([IVXLC]+)\b',
-    re.IGNORECASE,
-)
-_ROMAN_MAP = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100}
-
-
-def _roman_to_int(s: str) -> int | None:
-    """Convert a simple Roman numeral to int, or None."""
-    s = s.upper()
-    if not all(c in _ROMAN_MAP for c in s):
-        return None
-    total, prev = 0, 0
-    for c in reversed(s):
-        v = _ROMAN_MAP[c]
-        total += v if v >= prev else -v
-        prev = v
-    return total if total > 0 else None
-
-
-def _extract_chapter_number(title: str) -> int | None:
-    """Extract chapter number from title (Arabic or Roman numerals)."""
-    m = _CHAPTER_NUM_RE.search(title)
-    if m:
-        return int(m.group(1))
-    m = _ROMAN_RE.search(title)
-    if m:
-        return _roman_to_int(m.group(1))
-    return None
-
-
-def _normalize_title(title: str) -> str:
-    """Normalize a chapter title for fuzzy comparison."""
-    t = title.strip()
-    if not t:
-        return ""
-    # Remove chapter-prefix patterns ("Chapter 5:", "Kapitel XII –", …)
-    t = _CHAPTER_PREFIX_RE.sub("", t).strip()
-    # Collapse whitespace, lowercase
-    t = re.sub(r'\s+', ' ', t).lower()
-    # Strip leading/trailing punctuation
-    t = t.strip(' \t\n\r-–—:.,;!?()[]""„"\'')
-    return t
-
-
-def _title_similarity(a: str, b: str) -> float:
-    """Similarity score between two chapter titles (0.0–1.0)."""
-    if not a or not b:
-        return 0.0
-    if a == b:
-        return 1.0
-    # Containment bonus
-    if a in b or b in a:
-        return max(0.85, SequenceMatcher(None, a, b).ratio())
-    return SequenceMatcher(None, a, b).ratio()
-
-
-def _match_chapters_by_title(
-    audio_ch: list[dict],
-    epub_ch: list[dict],
-    offset: int = 0,
-) -> list[tuple[int, int]]:
-    """Match audio chapters to EPUB chapters by title similarity.
-
-    Uses two strategies:
-    1. Fuzzy title matching (normalized titles, similarity >= 0.55)
-    2. Chapter number matching (e.g. "Kapitel 3" ↔ "Kapitel 3: Title")
-
-    Returns a list of (audio_idx, epub_idx) pairs, ordered by audio_idx.
-    Enforces monotonicity: if audio chapter i maps to EPUB chapter j,
-    then audio chapter i+1 must map to EPUB chapter >= j.
-    """
-    THRESHOLD = 0.55
-
-    epub_titles = [
-        (i, _normalize_title(e["title"]))
-        for i, e in enumerate(epub_ch)
-        if i >= offset
-    ]
-    audio_titles = [
-        (i, _normalize_title(a.get("title", "")))
-        for i, a in enumerate(audio_ch)
-    ]
-
-    # Strategy 1: Fuzzy title matching on normalized titles
-    raw_matches: list[tuple[float, int, int]] = []
-    for ai, at in audio_titles:
-        if not at:
-            continue
-        for ei, et in epub_titles:
-            if not et:
-                continue
-            score = _title_similarity(at, et)
-            if score >= THRESHOLD:
-                raw_matches.append((score, ai, ei))
-
-    # Strategy 2: Chapter number matching (for titles like "Kapitel 3" with no subtitle)
-    audio_nums: dict[int, int] = {}  # audio_idx → chapter_number
-    epub_nums: dict[int, int] = {}  # epub_idx → chapter_number
-    for i, a in enumerate(audio_ch):
-        n = _extract_chapter_number(a.get("title", ""))
-        if n is not None:
-            audio_nums[i] = n
-    for i, e in enumerate(epub_ch):
-        if i < offset:
-            continue
-        n = _extract_chapter_number(e["title"])
-        if n is not None:
-            epub_nums[i] = n
-
-    # Build reverse lookup: number → epub_idx
-    num_to_epub: dict[int, int] = {}
-    for ei, num in epub_nums.items():
-        if num not in num_to_epub:  # first occurrence wins
-            num_to_epub[num] = ei
-
-    for ai, num in audio_nums.items():
-        if num in num_to_epub:
-            ei = num_to_epub[num]
-            # Add with score 0.75 (lower than exact title match but above threshold)
-            raw_matches.append((0.75, ai, ei))
-
-    # Sort by score descending, greedily select while maintaining monotonicity
-    raw_matches.sort(key=lambda x: -x[0])
-    used_audio: set[int] = set()
-    used_epub: set[int] = set()
-    selected: list[tuple[int, int]] = []
-
-    for score, ai, ei in raw_matches:
-        if ai in used_audio or ei in used_epub:
-            continue
-        selected.append((ai, ei))
-        used_audio.add(ai)
-        used_epub.add(ei)
-
-    # Sort by audio index
-    selected.sort(key=lambda x: x[0])
-
-    # Enforce strict monotonicity (remove any inversions)
-    monotonic: list[tuple[int, int]] = []
-    for ai, ei in selected:
-        if not monotonic or ei > monotonic[-1][1]:
-            monotonic.append((ai, ei))
-
-    return monotonic
-
-
-def _match_by_boundary_alignment(
-    audio_ch: list[dict],
-    epub_ch: list[dict],
-    offset: int = 0,
-) -> list[tuple[int, int]]:
-    """Match chapter boundaries by cumulative fractional position.
-
-    If audio chapter 3 starts at 30% of total duration and EPUB chapter 5
-    starts at 31% of total words, they likely correspond. This works even
-    when chapter titles are completely different (e.g. "Track 01" vs
-    "Der Anfang").
-
-    The tolerance adapts: stricter when both sides have similar chapter
-    counts, looser when they differ a lot.
-    """
-    if not audio_ch or not epub_ch:
-        return []
-    total_dur = audio_ch[-1].get("end", 0)
-    epub_chs = epub_ch[offset:]
-    total_words = sum(e["word_count"] for e in epub_chs)
-    if total_dur <= 0 or total_words <= 0:
-        return []
-
-    # Compute cumulative fraction at each chapter START
-    audio_fracs: list[tuple[float, int]] = []  # (fraction, original_idx)
-    for i, a in enumerate(audio_ch):
-        audio_fracs.append((a["start"] / total_dur, i))
-
-    epub_fracs: list[tuple[float, int]] = []  # (fraction, original_idx)
-    cum_w = 0
-    for i, e in enumerate(epub_chs):
-        epub_fracs.append((cum_w / total_words, i + offset))
-        cum_w += e["word_count"]
-
-    # Adaptive tolerance based on chapter count ratio
-    n_ratio = min(len(audio_ch), len(epub_chs)) / max(len(audio_ch), len(epub_chs))
-    tolerance = 0.03 if n_ratio > 0.8 else 0.06 if n_ratio > 0.5 else 0.10
-
-    # Greedy matching: for each audio boundary, find closest EPUB boundary
-    used_epub: set[int] = set()
-    matches: list[tuple[float, int, int]] = []  # (distance, audio_idx, epub_idx)
-
-    for a_frac, ai in audio_fracs:
-        best_dist, best_ei = tolerance, -1
-        for e_frac, ei in epub_fracs:
-            if ei in used_epub:
-                continue
-            dist = abs(a_frac - e_frac)
-            if dist < best_dist:
-                best_dist, best_ei = dist, ei
-        if best_ei >= 0:
-            matches.append((best_dist, ai, best_ei))
-            used_epub.add(best_ei)
-
-    # Sort by audio index
-    matches.sort(key=lambda x: x[1])
-
-    # Enforce strict monotonicity
-    monotonic: list[tuple[int, int]] = []
-    for _, ai, ei in matches:
-        if not monotonic or ei > monotonic[-1][1]:
-            monotonic.append((ai, ei))
-
-    return monotonic
-
-
-def _build_wpm_anchors(
-    audio_ch: list[dict],
-    epub_ch: list[dict],
-    total_dur: float,
-    offset: int = 0,
-) -> list[tuple[float, int]]:
-    """Build anchor points using WPM estimation (no chapter matching needed).
-
-    Assumes constant narration speed. Creates an anchor at each EPUB chapter
-    boundary based on the estimated reading position at that word count.
-
-    This is more accurate than proportional index mapping because it accounts
-    for chapters of different lengths.
-    """
-    epub_chs = epub_ch[offset:]
-    total_words = sum(e["word_count"] for e in epub_chs)
-    if total_words <= 0 or total_dur <= 0:
-        return []
-
-    wpm = total_words / (total_dur / 60)  # words per minute
-
-    # Pre-offset char count
-    pre_offset_chars = sum(e["char_count"] + 1 for e in epub_ch[:offset])
-
-    anchors: list[tuple[float, int]] = [(0.0, 0)]
-    cum_words = 0
-    cum_chars = pre_offset_chars
-    for e in epub_chs:
-        cum_words += e["word_count"]
-        cum_chars += e["char_count"] + 1
-        estimated_time = (cum_words / wpm) * 60  # seconds
-        # Clamp to total duration
-        estimated_time = min(estimated_time, total_dur)
-        anchors.append((estimated_time, cum_chars))
-
-    return anchors
-
-
-def _get_chapter_mapping(
-    audio_ch: list[dict],
-    epub_ch: list[dict],
-    offset: int = 0,
-    item_id: str | None = None,
-) -> list[tuple[int, int]]:
-    """Get (cached) chapter mapping for a book.
-
-    Tries strategies in order:
-    1. Title matching (fuzzy + number-based)
-    2. Boundary alignment (cumulative fraction matching)
-    """
-    cache_key = f"{item_id}:{offset}" if item_id else None
-    if cache_key and cache_key in _chapter_mapping_cache:
-        return _chapter_mapping_cache[cache_key]
-
-    # Strategy 1: Title matching
-    mapping = _match_chapters_by_title(audio_ch, epub_ch, offset)
-
-    # Strategy 2: If title matching found < 2 pairs, try boundary alignment
-    if len(mapping) < 2 and len(audio_ch) >= 3 and len(epub_ch) >= 3:
-        boundary_mapping = _match_by_boundary_alignment(audio_ch, epub_ch, offset)
-        if len(boundary_mapping) > len(mapping):
-            mapping = boundary_mapping
-
-    if cache_key:
-        _chapter_mapping_cache[cache_key] = mapping
-    return mapping
-
-
-# --- Anchor-point system ---
-
-def _build_anchor_points(
-    audio_ch: list[dict],
-    epub_ch: list[dict],
-    mapping: list[tuple[int, int]],
-    total_dur: float,
-    manual_anchors: list[tuple[float, int]] | None = None,
-) -> list[tuple[float, int]]:
-    """Build sorted (time, char_pos) anchor points from chapter mapping.
-
-    Each matched chapter pair contributes two anchors (start & end).
-    Manual anchors (from multi-point calibration) are merged in.
-    Book boundaries (0,0) and (total_dur, total_chars) are always included.
-    """
-    char_starts = _epub_char_starts(epub_ch)
-    total_chars = sum(e["char_count"] + 1 for e in epub_ch)
-
-    anchors: list[tuple[float, int]] = [(0.0, 0)]
-
-    for ai, ei in mapping:
-        a = audio_ch[ai]
-        t_start = a["start"]
-        t_end = a.get("end", a["start"])
-        c_start = char_starts[ei]
-        c_end = char_starts[ei] + epub_ch[ei]["char_count"]
-        anchors.append((t_start, c_start))
-        anchors.append((t_end, c_end))
-
-    if manual_anchors:
-        anchors.extend(manual_anchors)
-
-    anchors.append((total_dur, total_chars))
-
-    # Sort by time, deduplicate (keep last for same time)
-    anchors.sort(key=lambda x: (x[0], x[1]))
-    cleaned: list[tuple[float, int]] = [anchors[0]]
-    for t, c in anchors[1:]:
-        if t > cleaned[-1][0] + 0.5:  # >0.5s gap = new point
-            # Ensure char_pos is also monotonically increasing
-            if c >= cleaned[-1][1]:
-                cleaned.append((t, c))
-            else:
-                # Non-monotonic char_pos → skip (bad match)
-                pass
-        else:
-            # Same time point → update char_pos if larger
-            if c > cleaned[-1][1]:
-                cleaned[-1] = (t, c)
-
-    return cleaned
 
 
 def _interpolate_time_to_char(anchors: list[tuple[float, int]], time_sec: float) -> int:
@@ -935,28 +402,19 @@ def _interpolate_char_to_time(anchors: list[tuple[float, int]], char_pos: int) -
 
 
 def _get_anchors(
-    audio_ch: list[dict],
     epub_ch: list[dict],
     total_dur: float,
-    offset: int = 0,
     item_id: str | None = None,
-    manual_anchors: list[tuple[float, int]] | None = None,
-) -> tuple[list[tuple[float, int]], list[tuple[int, int]]]:
-    """Get anchor points from Whisper sync (required).
+) -> list[tuple[float, int]]:
+    """Get anchor points from Whisper-Sync.
 
-    Whisper-only mode: only Whisper auto-sync anchors are used for mapping.
-    No chapter-matching, WPM, or legacy fallbacks.
-    Start/end boundaries are always added.
+    Uses only Whisper auto-sync anchors plus start/end boundaries.
 
-    Returns (anchors, mapping).
+    Returns sorted list of (audio_seconds, char_position) anchors.
     """
-    mapping = _get_chapter_mapping(audio_ch, epub_ch, offset, item_id)
-
-    # Only Whisper anchors are used for position mapping
     whisper_anchors = _load_whisper_anchors(item_id) if item_id else None
 
     total_chars = sum(e["char_count"] + 1 for e in epub_ch)
-    # Build anchors from Whisper + start/end boundaries only
     anchors: list[tuple[float, int]] = [(0.0, 0)]
     if whisper_anchors:
         anchors.extend(whisper_anchors)
@@ -981,28 +439,8 @@ def _get_anchors(
         logger.warning("Whisper-Sync: %d von %d Ankern wegen Monotonie verworfen",
                        dropped, len(anchors) - 2)
 
-    return cleaned, mapping
+    return cleaned
 
-
-def _find_audio_chapter_at_time(audio_ch: list[dict], time_sec: float) -> tuple[str, float]:
-    """Find audio chapter title and progress % at a given time."""
-    if not audio_ch:
-        return "(unbekannt)", 0.0
-    cur, ci = audio_ch[0], 0
-    for i, a in enumerate(audio_ch):
-        if a["start"] <= time_sec < a.get("end", a["start"]):
-            cur, ci = a, i
-            break
-        if a["start"] <= time_sec:
-            cur, ci = a, i
-    cs = cur["start"]
-    ce = cur.get("end", cs)
-    cd = ce - cs
-    pct = max(0, min(1, (time_sec - cs) / max(cd, 1))) * 100
-    return cur.get("title", f"Kapitel {ci + 1}"), pct
-
-
-# --- Main mapping functions (v2: anchor-based with fallback) ---
 
 def _find_epub_chapter_at_char(epub_ch: list[dict], char_pos: int) -> tuple[str, float]:
     """Find the EPUB chapter and progress % at a given character position."""
@@ -1020,54 +458,40 @@ def _find_epub_chapter_at_char(epub_ch: list[dict], char_pos: int) -> tuple[str,
 
 
 def _time_to_char_position(
-    audio_ch, epub_ch, time_sec, total_dur,
-    offset: int = 0, item_id: str | None = None,
-    manual_anchors: list[tuple[float, int]] | None = None,
+    epub_ch, time_sec, total_dur,
+    item_id: str | None = None,
 ):
     """Map audio time → character position in EPUB full text.
 
-    Whisper-only: uses Whisper anchor interpolation with start/end boundaries.
-    Linear interpolation between start and end if no Whisper anchors exist.
+    Uses Whisper anchor interpolation with start/end boundaries.
 
     Returns: (char_offset, epub_chapter_title, epub_chapter_progress_pct)
     """
     full_text = _build_full_text(epub_ch, item_id)
+    anchors = _get_anchors(epub_ch, total_dur, item_id)
 
-    # Get Whisper-based anchors (+ start/end boundaries)
-    anchors, mapping = _get_anchors(
-        audio_ch, epub_ch, total_dur, offset, item_id, manual_anchors,
-    )
-
-    # Interpolate using anchors (always at least start+end)
     char_pos = _interpolate_time_to_char(anchors, time_sec)
     char_pos = max(0, min(char_pos, len(full_text) - 1))
 
-    # Determine EPUB chapter from char position
     title, pct = _find_epub_chapter_at_char(epub_ch, char_pos)
     return char_pos, title, pct
 
 
 def _char_position_to_time(
-    audio_ch, epub_ch, char_pos, total_dur,
-    offset: int = 0, item_id: str | None = None,
-    manual_anchors: list[tuple[float, int]] | None = None,
+    epub_ch, char_pos, total_dur,
+    item_id: str | None = None,
 ):
     """Map character position → audio time.
 
-    Whisper-only: uses Whisper anchor interpolation with start/end boundaries.
+    Uses Whisper anchor interpolation with start/end boundaries.
 
     Returns: (audio_time_seconds, chapter_title)
     """
-    # Get Whisper-based anchors (+ start/end boundaries)
-    anchors, mapping = _get_anchors(
-        audio_ch, epub_ch, total_dur, offset, item_id, manual_anchors,
-    )
+    anchors = _get_anchors(epub_ch, total_dur, item_id)
 
     t = _interpolate_char_to_time(anchors, char_pos)
     t = max(0.0, min(t, total_dur))
-    title = "(geschätzt)"
-    if audio_ch:
-        title, _ = _find_audio_chapter_at_time(audio_ch, t)
+    title, _ = _find_epub_chapter_at_char(epub_ch, char_pos)
     return t, title
 
 
@@ -1089,85 +513,27 @@ def _chapters_in_char_range(epub_ch, c_start: int, c_end: int) -> list[str]:
 
 
 def map_time_to_text(
-    audio_ch, epub_ch, start_sec, end_sec,
-    offset: int = 0, item_id: str | None = None,
+    epub_ch, start_sec, end_sec,
+    total_dur: float, item_id: str | None = None,
 ):
-    """Extract EPUB text for an audio time range.
-
-    Uses anchor-based mapping when available for higher accuracy.
-    """
+    """Extract EPUB text for an audio time range using Whisper-Sync anchors."""
     if not epub_ch:
         raise ValueError("No EPUB chapters")
-    if not audio_ch:
-        return _pfb(epub_ch, start_sec, end_sec, end_sec)
 
-    total_dur = audio_ch[-1].get("end", 0) if audio_ch else end_sec
+    anchors = _get_anchors(epub_ch, total_dur, item_id)
+    full = _build_full_text(epub_ch, item_id)
 
-    # Try anchor-based mapping
-    anchors, mapping = _get_anchors(
-        audio_ch, epub_ch, total_dur, offset, item_id,
-    )
-
-    if len(anchors) >= 3:
-        # Anchor-based: map start/end to char positions via interpolation
-        full = _build_full_text(epub_ch, item_id)
-        c0 = _interpolate_time_to_char(anchors, start_sec)
-        c1 = _interpolate_time_to_char(anchors, end_sec)
-        c0 = max(0, min(c0, len(full) - 1))
-        c1 = max(c0, min(c1, len(full)))
-        if c0 > 0:
-            c0 = _snap_to_sentence_start(full, c0)
-        if c1 < len(full):
-            c1 = _snap_to_sentence_end(full, c1)
-        text = full[c0:c1]
-        if text.strip():
-            names = _chapters_in_char_range(epub_ch, c0, c1)
-            return text, names
-
-    # Fallback: legacy per-audio-chapter mapping
-    parts, names = [], []
-    for i, a in enumerate(audio_ch):
-        cs, ce = a.get("start", 0), a.get("end", 0)
-        if cs >= end_sec or ce <= start_sec:
-            continue
-        ei = _audio_to_epub_idx(i, len(audio_ch), len(epub_ch), offset)
-        e = epub_ch[ei] if ei < len(epub_ch) else None
-        if not e:
-            at = a.get("title", "").lower()
-            for ec in epub_ch:
-                if ec["title"].lower() in at or at in ec["title"].lower():
-                    e = ec
-                    break
-        if not e:
-            continue
-        d = ce - cs
-        if d <= 0:
-            continue
-        ps, pe = max(0, (start_sec - cs) / d), min(1, (end_sec - cs) / d)
-        t = e["text"]
-        c0, c1 = int(len(t) * ps), int(len(t) * pe)
-        if c0 > 0:
-            c0 = _snap_to_sentence_start(t, c0)
-        if c1 < len(t):
-            c1 = _snap_to_sentence_end(t, c1)
-        p = t[c0:c1]
-        if p.strip():
-            parts.append(p)
-            names.append(a.get("title", e["title"]))
-    if not parts:
-        return _pfb(epub_ch, start_sec, end_sec, total_dur)
-    return "\n\n".join(parts), names
-
-
-def _pfb(ec, ss, es, td):
-    if td <= 0: td = 1
-    ft = " ".join(c["text"] for c in ec)
-    c0, c1 = int(len(ft) * ss / td), int(len(ft) * es / td)
+    c0 = _interpolate_time_to_char(anchors, start_sec)
+    c1 = _interpolate_time_to_char(anchors, end_sec)
+    c0 = max(0, min(c0, len(full) - 1))
+    c1 = max(c0, min(c1, len(full)))
     if c0 > 0:
-        c0 = _snap_to_sentence_start(ft, c0)
-    if c1 < len(ft):
-        c1 = _snap_to_sentence_end(ft, c1)
-    return ft[c0:c1], ["(geschätzt)"]
+        c0 = _snap_to_sentence_start(full, c0)
+    if c1 < len(full):
+        c1 = _snap_to_sentence_end(full, c1)
+    text = full[c0:c1]
+    names = _chapters_in_char_range(epub_ch, c0, c1) if text.strip() else ["(geschätzt)"]
+    return text, names
 
 
 # ---------------------------------------------------------------------------
@@ -1229,7 +595,7 @@ async def get_library_items():
             "current_time": prog.get("currentTime", 0),
             "cover": f"/api/cover/{item['id']}",
             "has_epub": _find_epub_file(item) is not None,
-            "is_calibrated": cal is not None,
+            "is_calibrated": cal is not None and bool(cal.get("whisper_anchors")),
             "is_favorite": item["id"] in fav_data,
         })
     return items
@@ -1404,26 +770,32 @@ async def _extract_audio_segment(
 def _select_sample_positions(
     audio_ch: list[dict], total_dur: float, n_samples: int = 10,
 ) -> list[float]:
-    """Select evenly-spaced sample positions, avoiding chapter boundaries."""
-    n_samples = max(3, min(n_samples, 20))
-    # Evenly spaced across the book (skip first/last 30 seconds)
-    margin = min(30, total_dur * 0.01)
+    """Select evenly-spaced sample positions, avoiding chapter boundaries.
+
+    For longer books, automatically increases sample count for better coverage.
+    Shifts samples away from chapter boundaries where narration may be unclear.
+    """
+    # Adaptive: at least 1 sample per 30 min, clamped to user request
+    auto_min = max(3, int(total_dur / 1800))
+    n_samples = max(auto_min, min(n_samples, 20))
+
+    # Evenly spaced across the book (skip first/last 60 seconds for intros/outros)
+    margin = min(60, total_dur * 0.02)
     step = (total_dur - 2 * margin) / max(n_samples - 1, 1)
     positions = [margin + i * step for i in range(n_samples)]
 
-    # Avoid chapter boundaries (±5s) — shift samples away
-    boundaries = set()
-    for ch in audio_ch:
-        boundaries.add(ch["start"])
-        if "end" in ch:
-            boundaries.add(ch["end"])
+    # Avoid chapter boundaries (±8s) — shift samples into middle of chapter
+    boundaries = sorted(set(
+        [ch["start"] for ch in audio_ch] +
+        [ch["end"] for ch in audio_ch if "end" in ch]
+    ))
 
     adjusted = []
     for pos in positions:
         for b in boundaries:
-            if abs(pos - b) < 5:
-                # Shift 8 seconds into the chapter
-                pos = b + 8
+            if abs(pos - b) < 8:
+                # Shift 12 seconds into the chapter (past transition)
+                pos = b + 12
                 break
         pos = max(margin, min(pos, total_dur - margin))
         adjusted.append(pos)
@@ -1472,18 +844,27 @@ def _find_text_in_epub(
     whisper_text: str,
     full_text: str,
     expected_frac: float,
-    window: float = 0.15,
 ) -> tuple[int, float] | None:
     """Find whisper-transcribed text in EPUB full text.
 
     Uses a sliding window on word-level with SequenceMatcher.
-    Searches within ±window fraction around expected_frac.
+    Adaptive search window: narrower for longer snippets (more unique),
+    wider for shorter ones.
 
     Returns (char_position, confidence_score) or None.
     """
     needle_words = _normalize_for_matching(whisper_text)
     if len(needle_words) < 3:
         return None
+
+    # Adaptive window: longer transcriptions are more unique → search narrower
+    n = len(needle_words)
+    if n >= 15:
+        window = 0.10
+    elif n >= 8:
+        window = 0.15
+    else:
+        window = 0.25
 
     # Determine search region in char space
     total_len = len(full_text)
@@ -1494,18 +875,15 @@ def _find_text_in_epub(
     region = full_text[search_start:search_end]
 
     haystack_words = _normalize_for_matching(region)
-    if len(haystack_words) < len(needle_words):
+    if len(haystack_words) < n:
         return None
 
     needle_str = " ".join(needle_words)
     best_score, best_pos = 0.0, -1
-    n = len(needle_words)
-    step = max(1, n // 6)  # Slide by ~1/6 of needle length for speed
+    # Finer step for better match precision (1/10 of needle length)
+    step = max(1, n // 10)
 
-    # Track character positions: we need to map word index → char offset
-    # IMPORTANT: use the same normalization as _normalize_for_matching so that
-    # word indices align. The regex replaces each punctuation char with a single
-    # space, preserving character offsets in the original region.
+    # Track character positions: map word index → char offset in region
     normalized_region = re.sub(r'[^\w\s\-äöüàáâèéêìíîòóôùúûß]', ' ', region.lower())
     word_char_starts: list[int] = []
     for m in re.finditer(r'\S+', normalized_region):
@@ -1518,12 +896,14 @@ def _find_text_in_epub(
             best_score = score
             best_pos = i
 
-    if best_score < 0.45 or best_pos < 0:
+    if best_score < 0.50 or best_pos < 0:
         return None
 
     # Refine: check neighbors of best_pos with step=1
     refined_score, refined_pos = best_score, best_pos
-    for j in range(max(0, best_pos - step), min(len(haystack_words) - n + 1, best_pos + step + 1)):
+    refine_range = max(step, 3)
+    for j in range(max(0, best_pos - refine_range),
+                   min(len(haystack_words) - n + 1, best_pos + refine_range + 1)):
         window_str = " ".join(haystack_words[j:j + n])
         score = SequenceMatcher(None, needle_str, window_str).ratio()
         if score > refined_score:
@@ -1773,156 +1153,22 @@ async def remove_favorite(item_id: str):
 # --- Calibration ---
 @app.get("/api/calibration/{item_id}")
 async def get_calibration(item_id: str):
-    """Get calibration status for a book."""
-    cal = load_calibrations().get(item_id)
-    ec, _, _ = await get_epub_chapters(item_id)
-    tw = _total_words(ec)
-    wpp = cal.get("words_per_page", DEFAULT_WORDS_PER_PAGE) if cal else DEFAULT_WORDS_PER_PAGE
-    offset = cal.get("epub_chapter_offset", 0) if cal else 0
+    """Get Whisper-Sync status for a book."""
+    whisper = get_whisper_anchors(item_id)
     return {
-        "is_calibrated": cal is not None and "words_per_page" in cal,
-        "words_per_page": wpp,
-        "total_words": tw,
-        "total_pages": max(1, round(tw / wpp)),
-        "method": cal.get("method", "default") if cal else "default",
-        "default_words_per_page": DEFAULT_WORDS_PER_PAGE,
-        "epub_chapter_offset": offset,
-        "epub_chapter_count": len(ec),
+        "has_whisper_sync": bool(whisper),
+        "anchor_count": len(whisper),
     }
-
-
-@app.post("/api/calibrate/by-page", response_model=CalibrateResponse)
-async def calibrate_by_page(req: CalibrateByPageRequest):
-    """Calibrate by: 'I'm on Kindle page X and audio is at Y seconds'."""
-    ec, audio_ch, duration = await get_epub_chapters(req.library_item_id)
-    tw = _total_words(ec)
-    offset = get_chapter_offset(req.library_item_id)
-
-    char_pos, _, _ = _time_to_char_position(
-        audio_ch, ec, req.audio_time_seconds, duration, offset,
-        item_id=req.library_item_id,
-    )
-    full = _build_full_text(ec, req.library_item_id)
-    words_at_pos = len(full[:char_pos].split())
-
-    if req.kindle_page <= 0:
-        raise HTTPException(status_code=400, detail="Seitenzahl muss > 0 sein")
-    wpp = words_at_pos / req.kindle_page
-    wpp = max(50, min(600, wpp))
-
-    set_calibration(req.library_item_id, wpp, "by_page",
-                    {"kindle_page": req.kindle_page, "audio_seconds": req.audio_time_seconds})
-
-    return CalibrateResponse(
-        words_per_page=round(wpp, 1),
-        total_pages=max(1, round(tw / wpp)),
-        method="by_page",
-    )
-
-
-@app.post("/api/calibrate/by-total", response_model=CalibrateResponse)
-async def calibrate_by_total(req: CalibrateByTotalRequest):
-    """Calibrate by: 'My Kindle shows X total pages'."""
-    ec, _, _ = await get_epub_chapters(req.library_item_id)
-    tw = _total_words(ec)
-
-    if req.total_kindle_pages <= 0:
-        raise HTTPException(status_code=400, detail="Seitenanzahl muss > 0 sein")
-    wpp = tw / req.total_kindle_pages
-    wpp = max(50, min(600, wpp))
-
-    set_calibration(req.library_item_id, wpp, "by_total",
-                    {"total_kindle_pages": req.total_kindle_pages})
-
-    return CalibrateResponse(
-        words_per_page=round(wpp, 1),
-        total_pages=max(1, round(tw / wpp)),
-        method="by_total",
-    )
-
-
-@app.post("/api/calibrate/by-wpp", response_model=CalibrateResponse)
-async def calibrate_by_wpp(req: CalibrateByWppRequest):
-    """Calibrate by setting words-per-page directly."""
-    ec, _, _ = await get_epub_chapters(req.library_item_id)
-    tw = _total_words(ec)
-    wpp = max(50, min(600, req.words_per_page))
-    set_calibration(req.library_item_id, wpp, "by_wpp")
-    return CalibrateResponse(
-        words_per_page=round(wpp, 1),
-        total_pages=max(1, round(tw / wpp)),
-        method="by_wpp",
-    )
-
-
-@app.post("/api/calibrate/offset")
-async def set_offset(req: SetOffsetRequest):
-    """Set the EPUB front-matter chapter offset."""
-    ec, _, _ = await get_epub_chapters(req.library_item_id)
-    if req.epub_chapter_offset < 0 or req.epub_chapter_offset >= len(ec):
-        raise HTTPException(status_code=400,
-                            detail=f"Offset muss zwischen 0 und {len(ec) - 1} liegen")
-    set_chapter_offset(req.library_item_id, req.epub_chapter_offset)
-    # Clear mapping caches (offset affects chapter matching)
-    for key in list(_chapter_mapping_cache):
-        if key.startswith(f"{req.library_item_id}:"):
-            del _chapter_mapping_cache[key]
-    for key in list(_anchor_cache):
-        if key.startswith(f"{req.library_item_id}:"):
-            del _anchor_cache[key]
-    return {"status": "ok", "epub_chapter_offset": req.epub_chapter_offset,
-            "epub_chapter_count": len(ec)}
 
 
 @app.delete("/api/calibration/{item_id}")
 async def reset_calibration(item_id: str):
+    """Reset all calibration data for a book."""
     cal = load_calibrations()
     cal.pop(item_id, None)
     save_calibrations(cal)
     _full_text_cache.pop(item_id, None)
-    # Clear mapping caches for this item
-    for key in list(_chapter_mapping_cache):
-        if key.startswith(f"{item_id}:"):
-            del _chapter_mapping_cache[key]
-    for key in list(_anchor_cache):
-        if key.startswith(f"{item_id}:"):
-            del _anchor_cache[key]
     return {"status": "reset"}
-
-
-@app.post("/api/calibrate/multi-anchor")
-async def calibrate_multi_anchor(req: MultiAnchorRequest):
-    """Multi-point calibration: store multiple (audio_time, kindle_page) pairs.
-
-    These anchor points are merged with auto-detected chapter matches to
-    create a more accurate piecewise-linear mapping.
-    """
-    if len(req.points) < 1:
-        raise HTTPException(status_code=400, detail="Mindestens 1 Ankerpunkt nötig")
-    if len(req.points) > 20:
-        raise HTTPException(status_code=400, detail="Maximal 20 Ankerpunkte")
-    ec, ac, dur = await get_epub_chapters(req.library_item_id)
-    for p in req.points:
-        if p.audio_seconds < 0 or p.audio_seconds > dur:
-            raise HTTPException(status_code=400,
-                                detail=f"Audio-Zeit {p.audio_seconds}s außerhalb 0–{dur:.0f}s")
-        if p.kindle_page < 1:
-            raise HTTPException(status_code=400, detail="Seitenzahl muss >= 1 sein")
-
-    points = [{"audio_seconds": p.audio_seconds, "kindle_page": p.kindle_page}
-              for p in sorted(req.points, key=lambda x: x.audio_seconds)]
-    set_anchor_points(req.library_item_id, points)
-
-    # Clear caches so next request uses updated anchors
-    for key in list(_anchor_cache):
-        if key.startswith(f"{req.library_item_id}:"):
-            del _anchor_cache[key]
-
-    return {
-        "status": "ok",
-        "anchor_count": len(points),
-        "anchor_points": points,
-    }
 
 
 @app.post("/api/whisper-sync/{item_id}")
@@ -2020,10 +1266,6 @@ async def whisper_sync(item_id: str, req: WhisperSyncRequest):
         # Store persistently
         if anchors:
             set_whisper_anchors(item_id, anchors)
-            # Clear caches
-            for key in list(_anchor_cache):
-                if key.startswith(f"{item_id}:"):
-                    del _anchor_cache[key]
 
         return {
             "status": "ok",
@@ -2056,81 +1298,23 @@ async def delete_whisper_sync(item_id: str):
         cal[item_id] = entry
         cal_path.write_text(json.dumps(cal, indent=2))
 
-    # Clear caches
-    for key in list(_anchor_cache):
-        if key.startswith(f"{item_id}:"):
-            del _anchor_cache[key]
-
     return {"status": "deleted"}
 
 
 @app.get("/api/chapter-mapping/{item_id}")
 async def get_chapter_mapping_endpoint(item_id: str):
-    """Show the auto-detected chapter mapping and anchor points.
-
-    Helps users understand and verify the alignment quality.
-    """
+    """Show Whisper-Sync anchor points for a book."""
     ec, ac, dur = await get_epub_chapters(item_id)
-    offset = get_chapter_offset(item_id)
-    mapping = _get_chapter_mapping(ac, ec, offset, item_id)
-    wpp = get_words_per_page(item_id) or DEFAULT_WORDS_PER_PAGE
-    manual = _load_manual_anchors(item_id, ec, wpp)
-    anchors, _ = _get_anchors(ac, ec, dur, offset, item_id, manual)
-
-    # Build detailed mapping info
-    matched = []
-    for ai, ei in mapping:
-        a = ac[ai]
-        e = ec[ei]
-        matched.append({
-            "audio_chapter": {
-                "index": ai,
-                "title": a.get("title", ""),
-                "start": round(a["start"], 1),
-                "end": round(a.get("end", a["start"]), 1),
-            },
-            "epub_chapter": {
-                "index": ei,
-                "title": e["title"],
-                "word_count": e["word_count"],
-            },
-            "similarity": round(
-                _title_similarity(
-                    _normalize_title(a.get("title", "")),
-                    _normalize_title(e["title"]),
-                ), 2
-            ),
-        })
-
-    # Unmatched audio chapters
-    matched_audio = {ai for ai, _ in mapping}
-    unmatched_audio = [
-        {"index": i, "title": a.get("title", ""), "start": round(a["start"], 1)}
-        for i, a in enumerate(ac)
-        if i not in matched_audio
-    ]
-
-    # Unmatched epub chapters
-    matched_epub = {ei for _, ei in mapping}
-    unmatched_epub = [
-        {"index": i, "title": e["title"], "word_count": e["word_count"]}
-        for i, e in enumerate(ec)
-        if i not in matched_epub
-    ]
+    anchors = _get_anchors(ec, dur, item_id)
+    whisper = get_whisper_anchors(item_id)
 
     return {
-        "quality": _mapping_quality_label(mapping, ac, ec, anchors, item_id),
-        "matched_count": len(mapping),
+        "quality": "whisper" if whisper else "none",
         "audio_chapter_count": len(ac),
         "epub_chapter_count": len(ec),
-        "epub_chapter_offset": offset,
-        "matched_chapters": matched,
-        "unmatched_audio": unmatched_audio,
-        "unmatched_epub": unmatched_epub,
         "anchor_count": len(anchors),
         "anchors": [{"time": round(t, 1), "char_pos": c} for t, c in anchors],
-        "manual_anchor_points": get_anchor_points(item_id),
-        "whisper_anchor_points": get_whisper_anchors(item_id),
+        "whisper_anchor_points": whisper,
     }
 
 
@@ -2139,14 +1323,12 @@ async def get_chapter_mapping_endpoint(item_id: str):
 async def get_position(req: PositionRequest):
     ec, ac, dur = await get_epub_chapters(req.library_item_id)
     full = _build_full_text(ec, req.library_item_id)
-    wpp = get_words_per_page(req.library_item_id) or DEFAULT_WORDS_PER_PAGE
-    tp = max(1, round(_total_words(ec) / wpp))
-    tw = _total_words(ec)
-    offset = get_chapter_offset(req.library_item_id)
-    manual = _load_manual_anchors(req.library_item_id, ec, wpp)
+    tw = sum(ch["word_count"] for ch in ec)
+    wpp = DEFAULT_WORDS_PER_PAGE
+    tp = max(1, round(tw / wpp))
     cp, ct, cpct = _time_to_char_position(
-        ac, ec, req.current_time_seconds, dur, offset,
-        item_id=req.library_item_id, manual_anchors=manual,
+        ec, req.current_time_seconds, dur,
+        item_id=req.library_item_id,
     )
     wb = len(full[:cp].split())
     page = max(1, min(tp, round(wb / wpp) + 1))
@@ -2157,16 +1339,14 @@ async def get_position(req: PositionRequest):
         if i != -1: s = i + 1
     i = full.rfind(" ", 0, e)
     if i != -1: e = i
-    # Determine mapping quality
-    mapping = _get_chapter_mapping(ac, ec, offset, req.library_item_id)
-    pos_anchors, _ = _get_anchors(ac, ec, dur, offset, req.library_item_id, manual)
+    synced = has_whisper_sync(req.library_item_id)
     return PositionResponse(estimated_page=page, total_pages=tp, percentage=pct,
                             chapter_title=ct, chapter_progress_pct=round(cpct, 1),
                             nearby_text=full[s:e],
-                            is_calibrated=get_words_per_page(req.library_item_id) is not None,
+                            is_calibrated=synced,
                             words_per_page=wpp,
-                            mapping_quality=_mapping_quality_label(mapping, ac, ec, pos_anchors, req.library_item_id),
-                            matched_chapters=len(mapping))
+                            mapping_quality="whisper" if synced else "none",
+                            matched_chapters=0)
 
 
 # --- Recap ---
@@ -2178,9 +1358,9 @@ async def create_recap(req: RecapRequest):
     d = es - ss
     if d <= 0: raise HTTPException(status_code=400, detail="End > Start")
     if d > 7200: raise HTTPException(status_code=400, detail="Max 120 min")
-    ec, ac, _ = await get_epub_chapters(req.library_item_id)
-    offset = get_chapter_offset(req.library_item_id)
-    text, names = map_time_to_text(ac, ec, ss, es, offset, item_id=req.library_item_id)
+    ec, ac, dur = await get_epub_chapters(req.library_item_id)
+    total_dur = ac[-1].get("end", 0) if ac else dur
+    text, names = map_time_to_text(ec, ss, es, total_dur, item_id=req.library_item_id)
     if not text or len(text.strip()) < 10:
         raise HTTPException(status_code=400, detail="Kein Text gefunden")
     summary = await summarize_text(text, req.summary_style, SUMMARY_LANGUAGE)
@@ -2201,7 +1381,6 @@ async def create_recap(req: RecapRequest):
 async def find_text(req: TextSearchRequest):
     ec, ac, dur = await get_epub_chapters(req.library_item_id)
     full = _build_full_text(ec, req.library_item_id)
-    offset = get_chapter_offset(req.library_item_id)
     q = req.query.strip()
     if len(q) < 3: raise HTTPException(status_code=400, detail="Min 3 Zeichen")
     idx = full.lower().find(q.lower())
@@ -2218,7 +1397,7 @@ async def find_text(req: TextSearchRequest):
             if bi != -1: break
         if bi != -1: idx, conf = bi, "approximate"
         else: raise HTTPException(status_code=404, detail="Text nicht gefunden")
-    ts, ct = _char_position_to_time(ac, ec, idx, dur, offset, item_id=req.library_item_id)
+    ts, ct = _char_position_to_time(ec, idx, dur, item_id=req.library_item_id)
     cs, ce = max(0, idx - 80), min(len(full), idx + len(q) + 80)
     return TextSearchResponse(audio_timestamp_seconds=round(ts, 1),
                               audio_timestamp_formatted=_format_time(ts),
@@ -2230,9 +1409,9 @@ async def find_text(req: TextSearchRequest):
 async def page_to_audio(req: PageToAudioRequest):
     ec, ac, dur = await get_epub_chapters(req.library_item_id)
     full = _build_full_text(ec, req.library_item_id)
-    offset = get_chapter_offset(req.library_item_id)
-    wpp = get_words_per_page(req.library_item_id) or DEFAULT_WORDS_PER_PAGE
-    tp = max(1, round(_total_words(ec) / wpp))
+    wpp = DEFAULT_WORDS_PER_PAGE
+    tw = sum(ch["word_count"] for ch in ec)
+    tp = max(1, round(tw / wpp))
     if req.page_number < 1 or req.page_number > tp:
         raise HTTPException(status_code=400, detail=f"Seite 1–{tp}")
     wt = (req.page_number - 1) * wpp
@@ -2241,11 +1420,7 @@ async def page_to_audio(req: PageToAudioRequest):
         if ch == ' ': wc += 1
         if wc >= wt: cp = i; break
     else: cp = len(full) - 1
-    manual = _load_manual_anchors(req.library_item_id, ec, wpp)
-    ts, ct = _char_position_to_time(
-        ac, ec, cp, dur, offset,
-        item_id=req.library_item_id, manual_anchors=manual,
-    )
+    ts, ct = _char_position_to_time(ec, cp, dur, item_id=req.library_item_id)
     s, e = max(0, cp - 200), min(len(full), cp + 200)
     if s > 0:
         i = full.find(" ", s)

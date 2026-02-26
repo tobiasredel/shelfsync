@@ -57,11 +57,6 @@
         /* Calibration panel */
         .cal-panel{display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem 1.5rem;margin-bottom:1.5rem}
         .cal-panel.visible{display:block}
-        .cal-tabs{display:flex;gap:0;margin-bottom:1rem;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
-        .cal-tab{flex:1;padding:.5rem;text-align:center;font-size:.78rem;cursor:pointer;background:var(--bg);color:var(--text-muted);border:none;font-family:inherit;transition:all .15s}
-        .cal-tab:not(:last-child){border-right:1px solid var(--border)}
-        .cal-tab.active{background:var(--purple-dim);color:var(--purple)}
-        .cal-content{display:none}.cal-content.active{display:block}
         .cal-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.8rem;flex-wrap:wrap}
         .cal-input{width:80px;padding:.5rem .6rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.95rem;text-align:center;outline:none}
         .cal-input:focus{border-color:var(--purple)}
@@ -134,15 +129,6 @@
         .sb:hover{background:#6ee7a0;transform:translateY(-1px)}.sb:disabled{opacity:.4;cursor:not-allowed}
         .ss{font-size:.78rem;color:var(--green);margin-top:.5rem;display:none}.ss.visible{display:block}
         .err{display:none;margin-top:1.5rem;padding:1rem 1.2rem;background:rgba(232,84,84,.08);border:1px solid rgba(232,84,84,.25);border-radius:var(--radius-sm);color:var(--danger);font-size:.88rem}.err.visible{display:block}
-        .anchor-list{display:flex;flex-direction:column;gap:.4rem;margin-bottom:.8rem;max-height:200px;overflow-y:auto}
-        .anchor-row{display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;background:var(--bg);border-radius:var(--radius-sm);font-size:.82rem}
-        .anchor-row input{width:70px;padding:.3rem .4rem;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none}
-        .anchor-row input:focus{border-color:var(--purple)}
-        .anchor-del{background:none;border:none;color:var(--danger);cursor:pointer;font-size:.9rem;padding:.1rem .3rem;opacity:.6}
-        .anchor-del:hover{opacity:1}
-        .anchor-add{background:none;border:1px dashed var(--border);border-radius:var(--radius-sm);padding:.4rem;text-align:center;color:var(--text-muted);font-size:.78rem;cursor:pointer;transition:all .15s}
-        .anchor-add:hover{border-color:var(--purple);color:var(--purple)}
-        .mapping-info{font-size:.75rem;color:var(--text-muted);margin-top:.5rem;padding:.5rem .6rem;background:var(--bg);border-radius:var(--radius-sm);line-height:1.5}
         @media(max-width:500px){.app{padding:1.2rem 1rem 3rem}.header h1{font-size:1.5rem}.time-row,.pos-row,.sr{flex-direction:column}}
     </style>
 </head>
@@ -170,65 +156,33 @@
         <div class="pos-cal-status" id="pCalStatus"></div>
     </div>
 
-    <!-- Calibration -->
+    <!-- Whisper-Sync -->
     <div class="cal-panel" id="calPanel">
-        <div class="sl" style="margin-bottom:.8rem">Kalibrierung</div>
-        <div class="cal-tabs">
-            <button class="cal-tab active" onclick="calTab(0)">Whisper Sync</button>
-            <button class="cal-tab" onclick="calTab(1)">Gesamtseitenzahl</button>
-            <button class="cal-tab" onclick="calTab(2)">Kapitel-Offset</button>
+        <div class="sl" style="margin-bottom:.8rem">Whisper-Sync</div>
+        <p class="cal-hint" style="margin-bottom:.8rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Ergebnisse werden dauerhaft gespeichert. Kosten: ~$0.02.</p>
+        <div id="whisperStatus" style="margin-bottom:.8rem"></div>
+        <div class="cal-row" style="gap:.5rem;flex-wrap:wrap">
+            <select class="cal-input" id="whisperLang" style="width:auto">
+                <option value="de">Deutsch</option>
+                <option value="en">English</option>
+                <option value="fr">Français</option>
+                <option value="es">Español</option>
+            </select>
+            <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
+            <span class="cal-hint">Samples</span>
+            <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
+            <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
         </div>
-        <div class="cal-content active" id="calC0">
-            <p class="cal-hint" style="margin-bottom:.8rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Ergebnisse werden dauerhaft gespeichert. Kosten: ~$0.02.</p>
-            <div id="whisperStatus" style="margin-bottom:.8rem"></div>
-            <div class="cal-row" style="gap:.5rem;flex-wrap:wrap">
-                <select class="cal-input" id="whisperLang" style="width:auto">
-                    <option value="de">Deutsch</option>
-                    <option value="en">English</option>
-                    <option value="fr">Français</option>
-                    <option value="es">Español</option>
-                </select>
-                <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
-                <span class="cal-hint">Samples</span>
-                <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
-                <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
-            </div>
-            <div id="whisperProgress" style="display:none;margin-top:.8rem">
-                <div style="display:flex;align-items:center;gap:.5rem">
-                    <div class="spinner" style="width:16px;height:16px;border-width:2px"></div>
-                    <span id="whisperProgressText">Starte...</span>
-                </div>
-            </div>
-            <details id="whisperDetails" style="display:none;margin-top:.8rem">
-                <summary style="cursor:pointer;font-size:.82rem;color:var(--text-muted)">Ankerpunkte anzeigen</summary>
-                <div id="whisperResult" style="margin-top:.5rem"></div>
-            </details>
-        </div>
-        <div class="cal-content" id="calC1">
-            <p class="cal-hint" style="margin-bottom:.8rem">Wie viele Seiten zeigt dein Reader insgesamt? (z.B. „Seite 42 <strong>von 320</strong>")</p>
-            <div class="cal-row">
-                <input type="number" class="cal-input" id="calTotal" placeholder="320" min="1">
-                <span class="cal-hint">Seiten gesamt</span>
-                <button class="cal-btn" id="calTotalBtn" onclick="calByTotal()">Kalibrieren</button>
-            </div>
-            <p class="cal-hint" style="margin-top:1rem;margin-bottom:.5rem">Oder direkt Wörter pro Seite setzen:</p>
-            <div class="cal-row">
-                <input type="number" class="cal-input" id="calWpp" placeholder="250" min="50" max="500" style="width:80px">
-                <span class="cal-hint">Wörter/Seite</span>
-                <button class="cal-btn" id="calWppBtn" onclick="calByWpp()">Setzen</button>
+        <div id="whisperProgress" style="display:none;margin-top:.8rem">
+            <div style="display:flex;align-items:center;gap:.5rem">
+                <div class="spinner" style="width:16px;height:16px;border-width:2px"></div>
+                <span id="whisperProgressText">Starte...</span>
             </div>
         </div>
-        <div class="cal-content" id="calC2">
-            <p class="cal-hint" style="margin-bottom:.8rem">Wenn das EPUB Vorwort/Titelseiten hat, die im Hörbuch fehlen: Wie viele EPUB-Kapitel sollen übersprungen werden?</p>
-            <div class="cal-row">
-                <input type="number" class="cal-input" id="calOffset" placeholder="0" min="0" value="0">
-                <span class="cal-hint">Kapitel überspringen (<span id="calOffsetMax">?</span> verfügbar)</span>
-                <button class="cal-btn" id="calOffsetBtn" onclick="calSetOffset()">Setzen</button>
-            </div>
-        </div>
-        <div class="cal-row" style="margin-top:.8rem">
-            <button class="cal-btn danger" id="calReset" onclick="calReset()" style="display:none">Kalibrierung zurücksetzen</button>
-        </div>
+        <details id="whisperDetails" style="display:none;margin-top:.8rem">
+            <summary style="cursor:pointer;font-size:.82rem;color:var(--text-muted)">Ankerpunkte anzeigen</summary>
+            <div id="whisperResult" style="margin-top:.5rem"></div>
+        </details>
         <div class="cal-result" id="calRes"></div>
     </div>
 
@@ -355,7 +309,7 @@ function renderBooks(){
         const meta=document.createElement('div');meta.className='book-meta';
         const author=document.createElement('span');author.textContent=b.author;meta.appendChild(author);
         const epubBadge=document.createElement('span');epubBadge.className='badge '+(b.has_epub?'badge-green':'badge-red');epubBadge.textContent=b.has_epub?'\u2713 EPUB':'\u2717 EPUB';meta.appendChild(epubBadge);
-        if(b.is_calibrated){const cb=document.createElement('span');cb.className='badge badge-purple';cb.textContent='\u2699 kalibriert';meta.appendChild(cb)}
+        if(b.is_calibrated){const cb=document.createElement('span');cb.className='badge badge-green';cb.textContent='Whisper-Sync';meta.appendChild(cb)}
         info.appendChild(title);info.appendChild(meta);item.appendChild(info);
 
         const prog=document.createElement('div');prog.className='book-progress';prog.textContent=fmt(b.current_time)+' / '+fmt(b.duration);
@@ -401,15 +355,9 @@ async function loadPos(){
         $('#pPct').textContent=`${d.percentage}%`;
         $('#pChName').textContent=d.chapter_title?`📖 ${d.chapter_title}`:'';
         $('#pNear').textContent=d.nearby_text?`„${d.nearby_text}"`:'';
-        const mqBadge = d.mapping_quality==='whisper'
+        $('#pCalStatus').innerHTML = d.mapping_quality==='whisper'
             ?'<span class="badge badge-green">Whisper-Sync aktiv</span>'
-            :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync — bitte synchronisieren</span>';
-        const mcInfo = d.matched_chapters>0
-            ?` <span style="font-size:.72rem;color:var(--text-muted)">(${d.matched_chapters} Kap. gematcht)</span>`:'';
-        $('#pCalStatus').innerHTML=(d.is_calibrated
-            ?'<span class="badge badge-purple">kalibriert</span> <span style="font-size:.72rem;color:var(--text-muted)">'+ d.words_per_page+' W/S</span> '
-            :'<span style="color:var(--text-muted)">Standard (250 W/S)</span> ')
-            +mqBadge+mcInfo;
+            :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync</span>';
         $('#posBox').classList.add('visible');
         $('#pgTotal').textContent=`von ${d.total_pages}`;
     }catch(e){$('#posBox').classList.remove('visible')}
@@ -417,83 +365,8 @@ async function loadPos(){
 
 async function loadCal(){
     if(!sel)return;
-    try{
-        const r=await fetch(`/api/calibration/${sel.id}`);
-        if(!r.ok)throw new Error('Kalibrierung konnte nicht geladen werden');
-        const d=await r.json();
-        $('#calReset').style.display=d.is_calibrated?'':'none';
-        $('#calOffset').value=d.epub_chapter_offset||0;
-        $('#calOffsetMax').textContent=d.epub_chapter_count||'?';
-        $('#calWpp').value=d.words_per_page||'';
-        $('#calWpp').placeholder=d.default_words_per_page||250;
-        $('#calPanel').classList.add('visible');
-        loadWhisperStatus();
-    }catch(e){$('#calPanel').classList.remove('visible');showCal('✗ '+e.message)}
-}
-
-function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i));if(i===0)loadWhisperStatus()}
-
-async function calByTotal(){
-    const v=parseInt($('#calTotal').value);if(!v||!sel)return;
-    const btn=$('#calTotalBtn');btn.disabled=true;btn.textContent='…';
-    try{
-        const r=await fetch('/api/calibrate/by-total',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:sel.id,total_kindle_pages:v})});
-        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
-        const d=await r.json();
-        showCal(`✓ Kalibriert: ${d.words_per_page} Wörter/Seite → ${d.total_pages} Seiten`);
-        loadPos();$('#calReset').style.display='';
-    }catch(e){showCal('✗ Fehler: '+e.message)}
-    finally{btn.disabled=false;btn.textContent='Kalibrieren'}
-}
-
-async function calByWpp(){
-    const v=parseFloat($('#calWpp').value);if(!v||!sel)return;
-    const btn=$('#calWppBtn');btn.disabled=true;btn.textContent='…';
-    try{
-        const r=await fetch('/api/calibrate/by-wpp',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:sel.id,words_per_page:v})});
-        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
-        const d=await r.json();
-        showCal(`✓ Kalibriert: ${d.words_per_page} Wörter/Seite → ${d.total_pages} Seiten`);
-        loadPos();$('#calReset').style.display='';
-    }catch(e){showCal('✗ Fehler: '+e.message)}
-    finally{btn.disabled=false;btn.textContent='Setzen'}
-}
-
-async function calByPage(){
-    const v=parseInt($('#calPage').value);if(!v||!sel)return;
-    const btn=$('#calPageBtn');btn.disabled=true;btn.textContent='…';
-    try{
-        const r=await fetch('/api/calibrate/by-page',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:sel.id,kindle_page:v,audio_time_seconds:sel.current_time})});
-        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
-        const d=await r.json();
-        showCal(`✓ Kalibriert: ${d.words_per_page} Wörter/Seite → ${d.total_pages} Seiten`);
-        loadPos();$('#calReset').style.display='';
-    }catch(e){showCal('✗ Fehler: '+e.message)}
-    finally{btn.disabled=false;btn.textContent='Kalibrieren'}
-}
-
-async function calSetOffset(){
-    const v=parseInt($('#calOffset').value);if(isNaN(v)||v<0||!sel)return;
-    const btn=$('#calOffsetBtn');btn.disabled=true;btn.textContent='…';
-    try{
-        const r=await fetch('/api/calibrate/offset',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:sel.id,epub_chapter_offset:v})});
-        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
-        showCal(`✓ Offset: ${v} Kapitel übersprungen`);
-        loadPos();
-    }catch(e){showCal('✗ Fehler: '+e.message)}
-    finally{btn.disabled=false;btn.textContent='Setzen'}
-}
-
-async function calReset(){
-    if(!sel)return;
-    const r=await fetch(`/api/calibration/${sel.id}`,{method:'DELETE'});
-    if(!r.ok){showCal('✗ Zurücksetzen fehlgeschlagen');return}
-    showCal('Kalibrierung zurückgesetzt');$('#calOffset').value=0;
-    loadPos();$('#calReset').style.display='none';
+    $('#calPanel').classList.add('visible');
+    loadWhisperStatus();
 }
 
 function showCal(msg){$('#calRes').textContent=msg;$('#calRes').classList.add('visible');setTimeout(()=>$('#calRes').classList.remove('visible'),5000)}
@@ -548,76 +421,6 @@ async function doSync(){
 function tog(b,id){b.classList.toggle('open');$('#'+id).classList.toggle('visible')}
 function se(id,m){const e=$('#'+id);e.textContent=m;e.classList.add('visible')}
 function he(id){$('#'+id).classList.remove('visible')}
-
-// --- Anchor points ---
-let anchorRows=[];
-
-function addAnchorRow(audioMin,page){
-    const list=$('#anchorList');
-    const idx=anchorRows.length;
-    const row=document.createElement('div');row.className='anchor-row';row.dataset.idx=idx;
-
-    const lbl1=document.createElement('span');lbl1.textContent='Audio ';lbl1.style.color='var(--text-muted)';
-    const minIn=document.createElement('input');minIn.type='number';minIn.placeholder='Min';minIn.min='0';
-    minIn.value=audioMin||'';minIn.title='Audio-Minute';
-    const lbl2=document.createElement('span');lbl2.textContent=' min → Seite ';lbl2.style.color='var(--text-muted)';
-    const pgIn=document.createElement('input');pgIn.type='number';pgIn.placeholder='Seite';pgIn.min='1';
-    pgIn.value=page||'';pgIn.title='Kindle-Seite';
-    const del=document.createElement('button');del.className='anchor-del';del.textContent='\u2715';
-    del.onclick=()=>{row.remove();anchorRows=anchorRows.filter((_,i)=>i!==idx)};
-
-    row.appendChild(lbl1);row.appendChild(minIn);row.appendChild(lbl2);row.appendChild(pgIn);row.appendChild(del);
-    list.appendChild(row);
-    anchorRows.push({minIn,pgIn});
-}
-
-async function saveAnchors(){
-    if(!sel)return;
-    const points=[];
-    for(const {minIn,pgIn} of anchorRows){
-        if(!minIn.parentElement)continue; // deleted
-        const m=parseFloat(minIn.value),p=parseInt(pgIn.value);
-        if(isNaN(m)||isNaN(p)||p<1)continue;
-        points.push({audio_seconds:m*60,kindle_page:p});
-    }
-    if(!points.length){showCal('Keine gültigen Ankerpunkte');return}
-    const btn=$('#anchorSaveBtn');btn.disabled=true;btn.textContent='…';
-    try{
-        const r=await fetch('/api/calibrate/multi-anchor',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:sel.id,points})});
-        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
-        const d=await r.json();
-        showCal(`✓ ${d.anchor_count} Ankerpunkte gespeichert`);
-        loadPos();
-    }catch(e){showCal('✗ '+e.message)}
-    finally{btn.disabled=false;btn.textContent='Ankerpunkte speichern'}
-}
-
-async function loadAnchors(){
-    if(!sel)return;
-    try{
-        const r=await fetch(`/api/chapter-mapping/${sel.id}`);
-        if(!r.ok)return;
-        const d=await r.json();
-        // Clear existing rows
-        anchorRows=[];$('#anchorList').textContent='';
-        // Load stored manual anchors
-        (d.manual_anchor_points||[]).forEach(p=>{
-            addAnchorRow(Math.round(p.audio_seconds/60),p.kindle_page);
-        });
-        // If no manual anchors, add an empty row
-        if(!anchorRows.length)addAnchorRow();
-        // Show mapping info
-        const info=$('#mappingInfo');
-        if(d.matched_count>0){
-            info.style.display='';
-            info.textContent=`Auto-Matching: ${d.matched_count}/${d.audio_chapter_count} Audio-Kapitel zugeordnet (Qualität: ${d.quality}). ${d.anchor_count} Ankerpunkte gesamt.`;
-        }else{
-            info.style.display='';
-            info.textContent='Kein automatisches Kapitel-Matching möglich. Manuelle Ankerpunkte verbessern die Genauigkeit erheblich.';
-        }
-    }catch(e){}
-}
 
 // --- Whisper Auto-Sync ---
 async function loadWhisperStatus(){
