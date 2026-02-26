@@ -998,6 +998,21 @@ def _find_audio_chapter_at_time(audio_ch: list[dict], time_sec: float) -> tuple[
 
 # --- Main mapping functions (v2: anchor-based with fallback) ---
 
+def _find_epub_chapter_at_char(epub_ch: list[dict], char_pos: int) -> tuple[str, float]:
+    """Find the EPUB chapter and progress % at a given character position."""
+    cum = 0
+    for i, e in enumerate(epub_ch):
+        ch_end = cum + e["char_count"]
+        if char_pos <= ch_end:
+            pct = (char_pos - cum) / max(e["char_count"], 1) * 100
+            return e.get("title", f"Kapitel {i + 1}"), max(0, min(100, pct))
+        cum = ch_end + 1  # +1 for space between chapters
+    # Past the end
+    if epub_ch:
+        return epub_ch[-1].get("title", f"Kapitel {len(epub_ch)}"), 100.0
+    return "(unbekannt)", 0.0
+
+
 def _time_to_char_position(
     audio_ch, epub_ch, time_sec, total_dur,
     offset: int = 0, item_id: str | None = None,
@@ -1008,7 +1023,7 @@ def _time_to_char_position(
     Whisper-only: uses Whisper anchor interpolation with start/end boundaries.
     Linear interpolation between start and end if no Whisper anchors exist.
 
-    Returns: (char_offset, chapter_title, chapter_progress_pct)
+    Returns: (char_offset, epub_chapter_title, epub_chapter_progress_pct)
     """
     full_text = _build_full_text(epub_ch, item_id)
 
@@ -1017,13 +1032,12 @@ def _time_to_char_position(
         audio_ch, epub_ch, total_dur, offset, item_id, manual_anchors,
     )
 
-    title, pct = ("(geschätzt)", time_sec / max(total_dur, 1) * 100)
-    if audio_ch:
-        title, pct = _find_audio_chapter_at_time(audio_ch, time_sec)
-
     # Interpolate using anchors (always at least start+end)
     char_pos = _interpolate_time_to_char(anchors, time_sec)
     char_pos = max(0, min(char_pos, len(full_text) - 1))
+
+    # Determine EPUB chapter from char position
+    title, pct = _find_epub_chapter_at_char(epub_ch, char_pos)
     return char_pos, title, pct
 
 
