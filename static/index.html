@@ -582,10 +582,12 @@ function renderCR(){
             if(dc.position){
                 detailText='S. '+dc.position.estimated_page+'/'+dc.position.total_pages+' · '+dc.position.percentage+'%';
                 if(dc.position.chapter_title) detailText+=' · '+dc.position.chapter_title;
-            }else{
+                if(dc.is_calibrated) detailText+=' · Sync aktiv';
+            }else if(dc.positionFailed){
                 detailText=pct(b)+'% gehört';
+            }else{
+                detailText='Lade Lesefortschritt…';
             }
-            if(dc.is_calibrated) detailText+=' · Sync aktiv';
             detail.textContent=detailText;
             info.appendChild(detail);
         }
@@ -615,11 +617,16 @@ function toggleLibrary(){
 
 async function loadCRPosition(b){
     try{
-        const pos=await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({library_item_id:b.id,current_time_seconds:b.current_time})})).json();
+        const r=await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_item_id:b.id,current_time_seconds:b.current_time})});
+        if(!r.ok) throw new Error('position fetch failed');
+        const pos=await r.json();
         if(detailsCache[b.id]) detailsCache[b.id].position=pos;
         renderCR();
-    }catch(e){}
+    }catch(e){
+        if(detailsCache[b.id]) detailsCache[b.id].positionFailed=true;
+        renderCR();
+    }
 }
 
 async function addCR(id){
