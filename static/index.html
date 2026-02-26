@@ -173,48 +173,13 @@
 
     <!-- Calibration -->
     <div class="cal-panel" id="calPanel">
-        <div class="sl" style="margin-bottom:.8rem">Kindle-Kalibrierung</div>
+        <div class="sl" style="margin-bottom:.8rem">Kalibrierung</div>
         <div class="cal-tabs">
-            <button class="cal-tab active" onclick="calTab(0)">Gesamtseitenzahl</button>
-            <button class="cal-tab" onclick="calTab(1)">Aktuelle Seite</button>
+            <button class="cal-tab active" onclick="calTab(0)">Whisper Sync</button>
+            <button class="cal-tab" onclick="calTab(1)">Gesamtseitenzahl</button>
             <button class="cal-tab" onclick="calTab(2)">Kapitel-Offset</button>
-            <button class="cal-tab" onclick="calTab(3)">Ankerpunkte</button>
-            <button class="cal-tab" onclick="calTab(4)">Whisper Sync</button>
         </div>
         <div class="cal-content active" id="calC0">
-            <p class="cal-hint" style="margin-bottom:.8rem">Wie viele Seiten zeigt dein Kindle insgesamt für dieses Buch? (z.B. „Seite 42 <strong>von 320</strong>")</p>
-            <div class="cal-row">
-                <input type="number" class="cal-input" id="calTotal" placeholder="320" min="1">
-                <span class="cal-hint">Seiten gesamt</span>
-                <button class="cal-btn" id="calTotalBtn" onclick="calByTotal()">Kalibrieren</button>
-            </div>
-        </div>
-        <div class="cal-content" id="calC1">
-            <p class="cal-hint" style="margin-bottom:.8rem">Auf welcher Kindle-Seite bist du gerade? Deine aktuelle Audio-Position wird automatisch verwendet.</p>
-            <div class="cal-row">
-                <span class="cal-hint">Ich bin auf Seite</span>
-                <input type="number" class="cal-input" id="calPage" placeholder="42" min="1">
-                <button class="cal-btn" id="calPageBtn" onclick="calByPage()">Kalibrieren</button>
-            </div>
-        </div>
-        <div class="cal-content" id="calC2">
-            <p class="cal-hint" style="margin-bottom:.8rem">Wenn das EPUB Vorwort/Titelseiten hat, die im Hörbuch fehlen: Wie viele EPUB-Kapitel sollen übersprungen werden?</p>
-            <div class="cal-row">
-                <input type="number" class="cal-input" id="calOffset" placeholder="0" min="0" value="0">
-                <span class="cal-hint">Kapitel überspringen (<span id="calOffsetMax">?</span> verfügbar)</span>
-                <button class="cal-btn" id="calOffsetBtn" onclick="calSetOffset()">Setzen</button>
-            </div>
-        </div>
-        <div class="cal-content" id="calC3">
-            <p class="cal-hint" style="margin-bottom:.8rem">Mehrere Referenzpunkte setzen: „Bei Audio-Minute X bin ich auf Kindle-Seite Y." Je mehr Punkte, desto genauer die Zuordnung.</p>
-            <div class="anchor-list" id="anchorList"></div>
-            <div class="anchor-add" onclick="addAnchorRow()">+ Ankerpunkt hinzufügen</div>
-            <div class="cal-row" style="margin-top:.8rem">
-                <button class="cal-btn" id="anchorSaveBtn" onclick="saveAnchors()">Ankerpunkte speichern</button>
-            </div>
-            <div class="mapping-info" id="mappingInfo" style="display:none"></div>
-        </div>
-        <div class="cal-content" id="calC4">
             <p class="cal-hint" style="margin-bottom:.8rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. <strong>Einmalig pro Buch</strong>, Ergebnisse werden dauerhaft gespeichert. Kosten: ~$0.02.</p>
             <div id="whisperStatus" style="margin-bottom:.8rem"></div>
             <div class="cal-row" style="gap:.5rem;flex-wrap:wrap">
@@ -236,6 +201,22 @@
                 </div>
             </div>
             <div id="whisperResult" style="display:none;margin-top:.8rem"></div>
+        </div>
+        <div class="cal-content" id="calC1">
+            <p class="cal-hint" style="margin-bottom:.8rem">Wie viele Seiten zeigt dein Reader insgesamt? (z.B. „Seite 42 <strong>von 320</strong>")</p>
+            <div class="cal-row">
+                <input type="number" class="cal-input" id="calTotal" placeholder="320" min="1">
+                <span class="cal-hint">Seiten gesamt</span>
+                <button class="cal-btn" id="calTotalBtn" onclick="calByTotal()">Kalibrieren</button>
+            </div>
+        </div>
+        <div class="cal-content" id="calC2">
+            <p class="cal-hint" style="margin-bottom:.8rem">Wenn das EPUB Vorwort/Titelseiten hat, die im Hörbuch fehlen: Wie viele EPUB-Kapitel sollen übersprungen werden?</p>
+            <div class="cal-row">
+                <input type="number" class="cal-input" id="calOffset" placeholder="0" min="0" value="0">
+                <span class="cal-hint">Kapitel überspringen (<span id="calOffsetMax">?</span> verfügbar)</span>
+                <button class="cal-btn" id="calOffsetBtn" onclick="calSetOffset()">Setzen</button>
+            </div>
         </div>
         <div class="cal-row" style="margin-top:.8rem">
             <button class="cal-btn danger" id="calReset" onclick="calReset()" style="display:none">Kalibrierung zurücksetzen</button>
@@ -413,16 +394,8 @@ async function loadPos(){
         $('#pChName').textContent=d.chapter_title?`📖 ${d.chapter_title}`:'';
         $('#pNear').textContent=d.nearby_text?`„${d.nearby_text}"`:'';
         const mqBadge = d.mapping_quality==='whisper'
-            ?'<span class="badge badge-green">Mapping: Whisper</span>'
-            :d.mapping_quality==='high'
-            ?'<span class="badge badge-green">Mapping: hoch</span>'
-            :d.mapping_quality==='medium'
-            ?'<span class="badge badge-amber">Mapping: mittel</span>'
-            :d.mapping_quality==='low'
-            ?'<span class="badge badge-amber">Mapping: niedrig</span>'
-            :d.mapping_quality==='wpm'
-            ?'<span class="badge badge-blue">Mapping: WPM</span>'
-            :'<span class="badge" style="background:var(--bg);color:var(--text-muted)">Mapping: proportional</span>';
+            ?'<span class="badge badge-green">Whisper-Sync aktiv</span>'
+            :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync — bitte synchronisieren</span>';
         const mcInfo = d.matched_chapters>0
             ?` <span style="font-size:.72rem;color:var(--text-muted)">(${d.matched_chapters} Kap. gematcht)</span>`:'';
         $('#pCalStatus').innerHTML=(d.is_calibrated
@@ -444,10 +417,11 @@ async function loadCal(){
         $('#calOffset').value=d.epub_chapter_offset||0;
         $('#calOffsetMax').textContent=d.epub_chapter_count||'?';
         $('#calPanel').classList.add('visible');
+        loadWhisperStatus();
     }catch(e){$('#calPanel').classList.remove('visible');showCal('✗ '+e.message)}
 }
 
-function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i));if(i===3)loadAnchors();if(i===4)loadWhisperStatus()}
+function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i));if(i===0)loadWhisperStatus()}
 
 async function calByTotal(){
     const v=parseInt($('#calTotal').value);if(!v||!sel)return;
