@@ -50,7 +50,9 @@
         .pos-label{font-size:.72rem;color:var(--text-muted);margin-top:.2rem}
         .pos-chapter{font-size:.82rem;color:var(--text-muted);margin-top:.8rem;padding-top:.8rem;border-top:1px solid var(--border)}
         .pos-nearby{font-size:.78rem;color:var(--text-muted);margin-top:.6rem;font-style:italic;line-height:1.5;background:var(--bg);padding:.6rem .8rem;border-radius:var(--radius-sm);max-height:80px;overflow:hidden}
-        .pos-cal-status{font-size:.72rem;margin-top:.6rem;display:flex;align-items:center;gap:.4rem}
+        .pos-cal-status{font-size:.72rem;margin-top:.6rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
+        .badge-blue{background:var(--blue-dim);color:var(--blue)}
+        .badge-amber{background:rgba(232,164,74,.12);color:var(--accent)}
 
         /* Calibration panel */
         .cal-panel{display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem 1.5rem;margin-bottom:1.5rem}
@@ -132,6 +134,15 @@
         .sb:hover{background:#6ee7a0;transform:translateY(-1px)}.sb:disabled{opacity:.4;cursor:not-allowed}
         .ss{font-size:.78rem;color:var(--green);margin-top:.5rem;display:none}.ss.visible{display:block}
         .err{display:none;margin-top:1.5rem;padding:1rem 1.2rem;background:rgba(232,84,84,.08);border:1px solid rgba(232,84,84,.25);border-radius:var(--radius-sm);color:var(--danger);font-size:.88rem}.err.visible{display:block}
+        .anchor-list{display:flex;flex-direction:column;gap:.4rem;margin-bottom:.8rem;max-height:200px;overflow-y:auto}
+        .anchor-row{display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;background:var(--bg);border-radius:var(--radius-sm);font-size:.82rem}
+        .anchor-row input{width:70px;padding:.3rem .4rem;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none}
+        .anchor-row input:focus{border-color:var(--purple)}
+        .anchor-del{background:none;border:none;color:var(--danger);cursor:pointer;font-size:.9rem;padding:.1rem .3rem;opacity:.6}
+        .anchor-del:hover{opacity:1}
+        .anchor-add{background:none;border:1px dashed var(--border);border-radius:var(--radius-sm);padding:.4rem;text-align:center;color:var(--text-muted);font-size:.78rem;cursor:pointer;transition:all .15s}
+        .anchor-add:hover{border-color:var(--purple);color:var(--purple)}
+        .mapping-info{font-size:.75rem;color:var(--text-muted);margin-top:.5rem;padding:.5rem .6rem;background:var(--bg);border-radius:var(--radius-sm);line-height:1.5}
         @media(max-width:500px){.app{padding:1.2rem 1rem 3rem}.header h1{font-size:1.5rem}.time-row,.pos-row,.sr{flex-direction:column}}
     </style>
 </head>
@@ -167,6 +178,7 @@
             <button class="cal-tab active" onclick="calTab(0)">Gesamtseitenzahl</button>
             <button class="cal-tab" onclick="calTab(1)">Aktuelle Seite</button>
             <button class="cal-tab" onclick="calTab(2)">Kapitel-Offset</button>
+            <button class="cal-tab" onclick="calTab(3)">Ankerpunkte</button>
         </div>
         <div class="cal-content active" id="calC0">
             <p class="cal-hint" style="margin-bottom:.8rem">Wie viele Seiten zeigt dein Kindle insgesamt für dieses Buch? (z.B. „Seite 42 <strong>von 320</strong>")</p>
@@ -191,6 +203,15 @@
                 <span class="cal-hint">Kapitel überspringen (<span id="calOffsetMax">?</span> verfügbar)</span>
                 <button class="cal-btn" id="calOffsetBtn" onclick="calSetOffset()">Setzen</button>
             </div>
+        </div>
+        <div class="cal-content" id="calC3">
+            <p class="cal-hint" style="margin-bottom:.8rem">Mehrere Referenzpunkte setzen: „Bei Audio-Minute X bin ich auf Kindle-Seite Y." Je mehr Punkte, desto genauer die Zuordnung.</p>
+            <div class="anchor-list" id="anchorList"></div>
+            <div class="anchor-add" onclick="addAnchorRow()">+ Ankerpunkt hinzufügen</div>
+            <div class="cal-row" style="margin-top:.8rem">
+                <button class="cal-btn" id="anchorSaveBtn" onclick="saveAnchors()">Ankerpunkte speichern</button>
+            </div>
+            <div class="mapping-info" id="mappingInfo" style="display:none"></div>
         </div>
         <div class="cal-row" style="margin-top:.8rem">
             <button class="cal-btn danger" id="calReset" onclick="calReset()" style="display:none">Kalibrierung zurücksetzen</button>
@@ -367,9 +388,19 @@ async function loadPos(){
         $('#pPct').textContent=`${d.percentage}%`;$('#pCh').textContent=`${d.chapter_progress_pct}%`;
         $('#pChName').textContent=d.chapter_title?`📖 ${d.chapter_title}`:'';
         $('#pNear').textContent=d.nearby_text?`„${d.nearby_text}"`:'';
-        $('#pCalStatus').innerHTML=d.is_calibrated
-            ?'<span class="badge badge-purple">⚙ kalibriert</span> <span style="font-size:.72rem;color:var(--text-muted)">'+ d.words_per_page+' Wörter/Seite</span>'
-            :'<span style="color:var(--text-muted)">Standard (250 W/S) – kalibriere für genauere Seitenzahlen ↓</span>';
+        const mqBadge = d.mapping_quality==='high'
+            ?'<span class="badge badge-green">Mapping: hoch</span>'
+            :d.mapping_quality==='medium'
+            ?'<span class="badge badge-amber">Mapping: mittel</span>'
+            :d.mapping_quality==='low'
+            ?'<span class="badge badge-amber">Mapping: niedrig</span>'
+            :'<span class="badge" style="background:var(--bg);color:var(--text-muted)">Mapping: proportional</span>';
+        const mcInfo = d.matched_chapters>0
+            ?` <span style="font-size:.72rem;color:var(--text-muted)">(${d.matched_chapters} Kap. gematcht)</span>`:'';
+        $('#pCalStatus').innerHTML=(d.is_calibrated
+            ?'<span class="badge badge-purple">kalibriert</span> <span style="font-size:.72rem;color:var(--text-muted)">'+ d.words_per_page+' W/S</span> '
+            :'<span style="color:var(--text-muted)">Standard (250 W/S)</span> ')
+            +mqBadge+mcInfo;
         $('#posBox').classList.add('visible');
         $('#pgTotal').textContent=`von ${d.total_pages}`;
     }catch(e){$('#posBox').classList.remove('visible')}
@@ -388,7 +419,7 @@ async function loadCal(){
     }catch(e){$('#calPanel').classList.remove('visible');showCal('✗ '+e.message)}
 }
 
-function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i))}
+function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i));if(i===3)loadAnchors()}
 
 async function calByTotal(){
     const v=parseInt($('#calTotal').value);if(!v||!sel)return;
@@ -491,6 +522,76 @@ async function doSync(){
 function tog(b,id){b.classList.toggle('open');$('#'+id).classList.toggle('visible')}
 function se(id,m){const e=$('#'+id);e.textContent=m;e.classList.add('visible')}
 function he(id){$('#'+id).classList.remove('visible')}
+
+// --- Anchor points ---
+let anchorRows=[];
+
+function addAnchorRow(audioMin,page){
+    const list=$('#anchorList');
+    const idx=anchorRows.length;
+    const row=document.createElement('div');row.className='anchor-row';row.dataset.idx=idx;
+
+    const lbl1=document.createElement('span');lbl1.textContent='Audio ';lbl1.style.color='var(--text-muted)';
+    const minIn=document.createElement('input');minIn.type='number';minIn.placeholder='Min';minIn.min='0';
+    minIn.value=audioMin||'';minIn.title='Audio-Minute';
+    const lbl2=document.createElement('span');lbl2.textContent=' min → Seite ';lbl2.style.color='var(--text-muted)';
+    const pgIn=document.createElement('input');pgIn.type='number';pgIn.placeholder='Seite';pgIn.min='1';
+    pgIn.value=page||'';pgIn.title='Kindle-Seite';
+    const del=document.createElement('button');del.className='anchor-del';del.textContent='\u2715';
+    del.onclick=()=>{row.remove();anchorRows=anchorRows.filter((_,i)=>i!==idx)};
+
+    row.appendChild(lbl1);row.appendChild(minIn);row.appendChild(lbl2);row.appendChild(pgIn);row.appendChild(del);
+    list.appendChild(row);
+    anchorRows.push({minIn,pgIn});
+}
+
+async function saveAnchors(){
+    if(!sel)return;
+    const points=[];
+    for(const {minIn,pgIn} of anchorRows){
+        if(!minIn.parentElement)continue; // deleted
+        const m=parseFloat(minIn.value),p=parseInt(pgIn.value);
+        if(isNaN(m)||isNaN(p)||p<1)continue;
+        points.push({audio_seconds:m*60,kindle_page:p});
+    }
+    if(!points.length){showCal('Keine gültigen Ankerpunkte');return}
+    const btn=$('#anchorSaveBtn');btn.disabled=true;btn.textContent='…';
+    try{
+        const r=await fetch('/api/calibrate/multi-anchor',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_item_id:sel.id,points})});
+        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
+        const d=await r.json();
+        showCal(`✓ ${d.anchor_count} Ankerpunkte gespeichert`);
+        loadPos();
+    }catch(e){showCal('✗ '+e.message)}
+    finally{btn.disabled=false;btn.textContent='Ankerpunkte speichern'}
+}
+
+async function loadAnchors(){
+    if(!sel)return;
+    try{
+        const r=await fetch(`/api/chapter-mapping/${sel.id}`);
+        if(!r.ok)return;
+        const d=await r.json();
+        // Clear existing rows
+        anchorRows=[];$('#anchorList').textContent='';
+        // Load stored manual anchors
+        (d.manual_anchor_points||[]).forEach(p=>{
+            addAnchorRow(Math.round(p.audio_seconds/60),p.kindle_page);
+        });
+        // If no manual anchors, add an empty row
+        if(!anchorRows.length)addAnchorRow();
+        // Show mapping info
+        const info=$('#mappingInfo');
+        if(d.matched_count>0){
+            info.style.display='';
+            info.textContent=`Auto-Matching: ${d.matched_count}/${d.audio_chapter_count} Audio-Kapitel zugeordnet (Qualität: ${d.quality}). ${d.anchor_count} Ankerpunkte gesamt.`;
+        }else{
+            info.style.display='';
+            info.textContent='Kein automatisches Kapitel-Matching möglich. Manuelle Ankerpunkte verbessern die Genauigkeit erheblich.';
+        }
+    }catch(e){}
+}
 </script>
 </body>
 </html>

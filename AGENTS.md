@@ -149,6 +149,13 @@ Calculates: total_words / total_kindle_pages = words_per_page
 **Body:** `{library_item_id, kindle_page, audio_time_seconds}`
 Maps audio position to word count, divides by kindle_page.
 
+### `POST /api/calibrate/multi-anchor`
+**Body:** `{library_item_id, points: [{audio_seconds, kindle_page}, ...]}`
+Store multiple reference points for piecewise-linear calibration.
+
+### `GET /api/chapter-mapping/{item_id}`
+Returns auto-detected chapter mapping, anchor points, matched/unmatched chapters, and quality assessment.
+
 ### `DELETE /api/calibration/{item_id}`
 Resets calibration to default.
 
@@ -163,21 +170,52 @@ Updates the user's listening position in Audiobookshelf via `PATCH /api/me/progr
 
 ## Core Algorithms
 
+### Anchor-Point Based Mapping (v2)
+
+The position sync system uses a **piecewise-linear interpolation** approach for accurate mapping between audio time and EPUB text position:
+
+1. **Chapter Title Matching** (`_match_chapters_by_title`):
+   - Normalizes titles (strips "Chapter X:", "Kapitel XII –", etc.)
+   - Two strategies: fuzzy string matching (SequenceMatcher ≥ 0.55) and chapter number matching (Arabic/Roman numerals)
+   - Enforces monotonicity: matched pairs must be in order
+   - Cached per book+offset combination
+
+2. **Anchor Points** (`_build_anchor_points`):
+   - Each matched chapter pair creates 2 anchors: (chapter_start_time, chapter_start_char) and (chapter_end_time, chapter_end_char)
+   - Book boundaries (0,0) and (total_dur, total_chars) always included
+   - Manual anchors from multi-point calibration merged in
+   - Monotonicity enforced (time and char_pos both increasing)
+
+3. **Piecewise-Linear Interpolation** (`_interpolate_time_to_char`, `_interpolate_char_to_time`):
+   - Binary search for surrounding anchor interval
+   - Linear interpolation within each interval
+   - O(log n) lookup via `bisect`
+
+4. **Fallback**: When < 2 chapters match, falls back to legacy proportional index mapping
+
+### Mapping Quality Levels
+- **high**: ≥ 70% of audio chapters matched by title
+- **medium**: 30–70% matched
+- **low**: < 30% matched
+- **legacy**: No title matching possible, using proportional index scaling
+
 ### Time → Text Mapping (`map_time_to_text`)
-1. Iterate audio chapters, find those overlapping [start_sec, end_sec]
-2. For each overlapping audio chapter, find corresponding EPUB chapter by index
-3. Calculate portion of chapter text based on time ratio within chapter
-4. Snap to word boundaries
-5. Fallback: proportional mapping across entire text if chapter mapping fails
+1. If anchor-based mapping available: map start/end times to character positions via anchors
+2. Extract text between positions, snap to sentence boundaries
+3. Fallback: iterate audio chapters, map each to EPUB chapter by index
 
 ### Time → Character Position (`_time_to_char_position`)
-1. Find current audio chapter by timestamp
-2. Calculate progress within that chapter (0.0–1.0)
-3. Sum character counts of previous EPUB chapters + fraction of current
-4. Returns: char_offset, chapter_title, chapter_progress_pct
+1. Try anchor-based interpolation (if ≥ 2 matched chapters)
+2. Fallback: legacy proportional chapter-index mapping
+3. Returns: char_offset, chapter_title, chapter_progress_pct
 
 ### Character Position → Time (`_char_position_to_time`)
-Reverse of above: find which EPUB chapter contains the char position, calculate progress ratio, apply to corresponding audio chapter's time range.
+Reverse of above: interpolate char position to time via anchors, or fallback to legacy mapping.
+
+### Multi-Point Calibration
+- Store multiple (audio_time, kindle_page) pairs per book
+- Converted to (time, char_pos) anchors via words_per_page
+- Merged with auto-detected chapter anchors for highest accuracy
 
 ### Text Search (`find_text`)
 1. Exact case-insensitive search in full EPUB text
@@ -195,7 +233,7 @@ Reverse of above: find which EPUB chapter contains the char position, calculate 
 
 ## Known Limitations & Issues
 
-1. **Chapter mapping accuracy:** The index-based mapping (audio chapter i = EPUB chapter i) breaks when the EPUB has front matter (title page, copyright, TOC) that the audiobook skips. Title-based fallback matching exists but is imperfect.
+1. **Chapter mapping accuracy:** Anchor-point based mapping with fuzzy title matching handles most books well. Falls back to proportional index mapping when titles don't match. Manual anchor points can be added for difficult books.
 
 2. **EPUB compatibility:** Only handles standard EPUB2/3 with OPF spine. DRM-protected EPUBs won't work. Some unusual EPUB structures may fail to parse.
 
