@@ -411,6 +411,12 @@
             <div class="pos-chapter" id="pChName"></div>
             <div class="pos-nearby" id="pNear"></div>
             <div class="pos-cal-status" id="pCalStatus"></div>
+            <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                <span style="font-size:.75rem;color:var(--text-muted)">Kindle-Seiten:</span>
+                <input type="number" id="pKindlePages" min="1" placeholder="z.B. 375" style="width:80px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
+                <button id="pKindleSave" onclick="saveKindlePages()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Setzen</button>
+                <span id="pKindleOk" style="font-size:.72rem;color:var(--green);display:none">Gespeichert</span>
+            </div>
         </div>
 
         <!-- Whisper-Sync -->
@@ -749,7 +755,27 @@ async function loadPos(){
             :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync</span>';
         $('#posBox').classList.add('visible');
         $('#pgTotal').textContent='von '+d.total_pages;
+        // Load stored Kindle page count
+        try{
+            const kp=await(await fetch('/api/books/'+encodeURIComponent(sel.id)+'/kindle-pages')).json();
+            if(kp.kindle_pages) $('#pKindlePages').value=kp.kindle_pages;
+            else $('#pKindlePages').value='';
+        }catch(e){}
     }catch(e){$('#posBox').classList.remove('visible')}
+}
+
+async function saveKindlePages(){
+    if(!sel)return;
+    const pages=parseInt($('#pKindlePages').value);
+    if(!pages||pages<1)return;
+    try{
+        await fetch('/api/books/'+encodeURIComponent(sel.id)+'/kindle-pages?pages='+pages,{method:'PUT'});
+        $('#pKindleOk').style.display='';
+        setTimeout(()=>$('#pKindleOk').style.display='none',2000);
+        // Clear cached position so loadPos fetches fresh data
+        if(detailsCache[sel.id]) delete detailsCache[sel.id].position;
+        loadPos();
+    }catch(e){}
 }
 
 async function loadCal(){
