@@ -115,7 +115,7 @@ _epub_cache: OrderedDict[str, list[dict]] = OrderedDict()
 # Calibration persistence (thread-safe)
 # ---------------------------------------------------------------------------
 _calibration_lock = threading.Lock()
-_favorites_lock = threading.Lock()
+_currently_reading_lock = threading.Lock()
 
 
 def _calibration_path() -> Path:
@@ -192,7 +192,7 @@ def _currently_reading_path() -> Path:
 
 def load_currently_reading() -> list[str]:
     """Return the list of currently-reading item IDs."""
-    with _favorites_lock:
+    with _currently_reading_lock:
         p = _currently_reading_path()
         if p.exists():
             try:
@@ -210,7 +210,7 @@ def load_currently_reading() -> list[str]:
 
 
 def save_currently_reading(item_ids: list[str]):
-    with _favorites_lock:
+    with _currently_reading_lock:
         _currently_reading_path().write_text(
             json.dumps({"item_ids": item_ids}, indent=2)
         )
@@ -1230,6 +1230,33 @@ async def reset_calibration(item_id: str):
     return {"status": "reset"}
 
 
+@app.put("/api/books/{item_id}/kindle-pages")
+async def set_kindle_pages(item_id: str, pages: int):
+    """Store the Kindle total page count for a book."""
+    if pages < 1:
+        raise HTTPException(status_code=400, detail="Seitenzahl muss >= 1 sein")
+    with _calibration_lock:
+        cal_path = _calibration_path()
+        cal = {}
+        if cal_path.exists():
+            try:
+                cal = json.loads(cal_path.read_text())
+            except Exception:
+                pass
+        entry = cal.get(item_id, {})
+        entry["kindle_pages"] = pages
+        cal[item_id] = entry
+        cal_path.write_text(json.dumps(cal, indent=2))
+    return {"item_id": item_id, "kindle_pages": pages}
+
+
+@app.get("/api/books/{item_id}/kindle-pages")
+async def get_kindle_pages(item_id: str):
+    cal = load_calibrations()
+    pages = (cal.get(item_id) or {}).get("kindle_pages")
+    return {"item_id": item_id, "kindle_pages": pages}
+
+
 @app.post("/api/whisper-sync/{item_id}")
 async def whisper_sync(item_id: str, req: WhisperSyncRequest):
     """Run Whisper auto-sync: transcribe short audio segments and find them in EPUB.
@@ -1398,12 +1425,20 @@ async def get_position(req: PositionRequest):
         if i != -1: s = i + 1
     i = full.rfind(" ", 0, e)
     if i != -1: e = i
+    # Use stored Kindle page count if available
+    cal_data = load_calibrations()
+    kindle_pages = (cal_data.get(req.library_item_id) or {}).get("kindle_pages")
+    if kindle_pages and kindle_pages > 0:
+        tp = kindle_pages
+        wpp = tw / max(tp, 1)
+        page = max(1, min(tp, round(wb / max(wpp, 1)) + 1))
+
     synced = has_whisper_sync(req.library_item_id)
     return PositionResponse(estimated_page=page, total_pages=tp, percentage=pct,
                             chapter_title=ct, chapter_progress_pct=round(cpct, 1),
                             nearby_text=full[s:e],
                             is_calibrated=synced,
-                            words_per_page=wpp,
+                            words_per_page=round(wpp, 1),
                             mapping_quality="whisper" if synced else "none",
                             matched_chapters=0)
 

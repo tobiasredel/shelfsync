@@ -131,7 +131,6 @@
         .badge-red{background:rgba(232,84,84,.1);color:var(--danger)}
         .badge-blue{background:var(--blue-dim);color:var(--blue)}
         .badge-amber{background:rgba(232,164,74,.12);color:var(--accent)}
-        .book-progress{font-size:.72rem;color:var(--accent);font-weight:500;flex-shrink:0;text-align:right;line-height:1.3}
         .book-cr-badge{font-size:.62rem;color:var(--accent);display:block}
 
         /* Bottom sheet overlay */
@@ -412,6 +411,12 @@
             <div class="pos-chapter" id="pChName"></div>
             <div class="pos-nearby" id="pNear"></div>
             <div class="pos-cal-status" id="pCalStatus"></div>
+            <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+                <span style="font-size:.75rem;color:var(--text-muted)">Kindle-Seiten:</span>
+                <input type="number" id="pKindlePages" min="1" placeholder="z.B. 375" style="width:80px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
+                <button id="pKindleSave" onclick="saveKindlePages()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Setzen</button>
+                <span id="pKindleOk" style="font-size:.72rem;color:var(--green);display:none">Gespeichert</span>
+            </div>
         </div>
 
         <!-- Whisper-Sync -->
@@ -539,7 +544,6 @@ function st(s,t){
     $('#sTxt').textContent=t;
 }
 function fmt(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h>0?`${h}h ${m}m`:`${m}m`}
-function pct(b){return b.duration>0?Math.round(b.current_time/b.duration*100):0}
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML}
 
 function renderCR(){
@@ -684,9 +688,6 @@ function renderBooks(){
         }
         info.appendChild(title);info.appendChild(meta);item.appendChild(info);
 
-        const prog=document.createElement('div');prog.className='book-progress';
-        prog.textContent=b.author;
-        item.appendChild(prog);
         l.appendChild(item);
     });
 }
@@ -741,7 +742,9 @@ async function toggleCurrentlyReading(){
 async function loadPos(){
     if(!sel)return;
     try{
-        const d=await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
+        // Use cached position from loadFullInfo if available
+        const cached=detailsCache[sel.id]&&detailsCache[sel.id].position;
+        const d=cached||await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({library_item_id:sel.id,current_time_seconds:sel.current_time})})).json();
         $('#pPage').textContent=d.estimated_page+' / '+d.total_pages;
         $('#pPct').textContent=d.percentage+'%';
@@ -752,7 +755,27 @@ async function loadPos(){
             :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync</span>';
         $('#posBox').classList.add('visible');
         $('#pgTotal').textContent='von '+d.total_pages;
+        // Load stored Kindle page count
+        try{
+            const kp=await(await fetch('/api/books/'+encodeURIComponent(sel.id)+'/kindle-pages')).json();
+            if(kp.kindle_pages) $('#pKindlePages').value=kp.kindle_pages;
+            else $('#pKindlePages').value='';
+        }catch(e){}
     }catch(e){$('#posBox').classList.remove('visible')}
+}
+
+async function saveKindlePages(){
+    if(!sel)return;
+    const pages=parseInt($('#pKindlePages').value);
+    if(!pages||pages<1)return;
+    try{
+        await fetch('/api/books/'+encodeURIComponent(sel.id)+'/kindle-pages?pages='+pages,{method:'PUT'});
+        $('#pKindleOk').style.display='';
+        setTimeout(()=>$('#pKindleOk').style.display='none',2000);
+        // Clear cached position so loadPos fetches fresh data
+        if(detailsCache[sel.id]) delete detailsCache[sel.id].position;
+        loadPos();
+    }catch(e){}
 }
 
 async function loadCal(){
