@@ -500,7 +500,7 @@ async def get_library_items():
     # Fetch item details concurrently to access libraryFiles for epub detection
     detail_resps = await asyncio.gather(*(
         c.get(f"{ABS_URL}/api/items/{iid}", headers=abs_headers(),
-              params={"include": "progress"}) for iid in item_ids
+              params={"expanded": 1, "include": "progress"}) for iid in item_ids
     ))
     items = []
     cal_data = load_calibrations()
