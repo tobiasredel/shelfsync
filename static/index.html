@@ -51,12 +51,6 @@
         .pos-chapter{font-size:.82rem;color:var(--text-muted);margin-top:.8rem;padding-top:.8rem;border-top:1px solid var(--border)}
         .pos-nearby{font-size:.78rem;color:var(--text-muted);margin-top:.6rem;font-style:italic;line-height:1.5;background:var(--bg);padding:.6rem .8rem;border-radius:var(--radius-sm);max-height:80px;overflow:hidden}
         .pos-cal-status{font-size:.72rem;margin-top:.6rem;display:flex;align-items:center;gap:.4rem;flex-wrap:wrap}
-        .wpp-edit{cursor:pointer;border-bottom:1px dashed var(--text-muted);transition:all .15s}.wpp-edit:hover{color:var(--purple);border-color:var(--purple)}
-        .wpp-inline{display:inline-flex;align-items:center;gap:.3rem}
-        .wpp-inline input{width:55px;font-size:.72rem;padding:.1rem .3rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-family:inherit}
-        .wpp-inline button{font-size:.68rem;padding:.1rem .4rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text);cursor:pointer;font-family:inherit}.wpp-inline button:hover{background:var(--purple);color:#fff;border-color:var(--purple)}
-        .pos-actions{margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap}
-        .pos-actions button{font-size:.72rem;padding:.25rem .6rem;border:1px solid var(--border);border-radius:4px;background:var(--surface);color:var(--text-muted);cursor:pointer;font-family:inherit;transition:all .15s}.pos-actions button:hover{background:var(--purple);color:#fff;border-color:var(--purple)}
         .badge-blue{background:var(--blue-dim);color:var(--blue)}
         .badge-amber{background:rgba(232,164,74,.12);color:var(--accent)}
 
@@ -174,10 +168,6 @@
         <div class="pos-chapter" id="pChName"></div>
         <div class="pos-nearby" id="pNear"></div>
         <div class="pos-cal-status" id="pCalStatus"></div>
-        <div class="pos-actions">
-            <button onclick="scrollToWhisperSync()">Whisper-Sync</button>
-            <button onclick="scrollToWppEdit()">W/S anpassen</button>
-        </div>
     </div>
 
     <!-- Calibration -->
@@ -416,48 +406,13 @@ async function loadPos(){
             :'<span class="badge" style="background:#c62828;color:#fff">Kein Whisper-Sync — bitte synchronisieren</span>';
         const mcInfo = d.matched_chapters>0
             ?` <span style="font-size:.72rem;color:var(--text-muted)">(${d.matched_chapters} Kap. gematcht)</span>`:'';
-        const wppLabel = d.is_calibrated
-            ?`<span class="badge badge-purple">kalibriert</span> <span class="wpp-edit" onclick="inlineWppEdit(this,${d.words_per_page})" title="Klicken zum Ändern">${d.words_per_page} W/S ✎</span> `
-            :`<span class="wpp-edit" onclick="inlineWppEdit(this,250)" title="Klicken zum Ändern" style="color:var(--text-muted)">Standard (250 W/S) ✎</span> `;
-        $('#pCalStatus').innerHTML=wppLabel+mqBadge+mcInfo;
+        $('#pCalStatus').innerHTML=(d.is_calibrated
+            ?'<span class="badge badge-purple">kalibriert</span> <span style="font-size:.72rem;color:var(--text-muted)">'+ d.words_per_page+' W/S</span> '
+            :'<span style="color:var(--text-muted)">Standard (250 W/S)</span> ')
+            +mqBadge+mcInfo;
         $('#posBox').classList.add('visible');
         $('#pgTotal').textContent=`von ${d.total_pages}`;
     }catch(e){$('#posBox').classList.remove('visible')}
-}
-
-function inlineWppEdit(el, current){
-    const parent=el.parentNode;
-    const span=document.createElement('span');
-    span.className='wpp-inline';
-    span.innerHTML=`<input type="number" value="${current}" min="50" max="600" step="1"><button>OK</button><button onclick="loadPos()">✗</button>`;
-    el.replaceWith(span);
-    const inp=span.querySelector('input');
-    inp.focus();inp.select();
-    const save=async()=>{
-        const v=parseFloat(inp.value);if(!v||!sel)return;
-        const btn=span.querySelector('button');btn.disabled=true;btn.textContent='…';
-        try{
-            const r=await fetch('/api/calibrate/by-wpp',{method:'POST',headers:{'Content-Type':'application/json'},
-                body:JSON.stringify({library_item_id:sel.id,words_per_page:v})});
-            if(!r.ok)throw new Error('Fehler');
-            loadPos();loadCal();
-        }catch(e){span.innerHTML=`<span style="color:var(--danger)">Fehler</span>`;setTimeout(loadPos,1500)}
-    };
-    span.querySelector('button').onclick=save;
-    inp.onkeydown=e=>{if(e.key==='Enter')save();if(e.key==='Escape')loadPos()};
-}
-
-function scrollToWhisperSync(){
-    calTab(0);
-    const el=$('#calPanel');
-    el.scrollIntoView({behavior:'smooth',block:'center'});
-}
-
-function scrollToWppEdit(){
-    calTab(1);
-    const el=$('#calPanel');
-    el.scrollIntoView({behavior:'smooth',block:'center'});
-    setTimeout(()=>$('#calWpp').focus(),400);
 }
 
 async function loadCal(){

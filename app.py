@@ -1777,10 +1777,10 @@ async def get_calibration(item_id: str):
     cal = load_calibrations().get(item_id)
     ec, _, _ = await get_epub_chapters(item_id)
     tw = _total_words(ec)
-    wpp = cal["words_per_page"] if cal else DEFAULT_WORDS_PER_PAGE
+    wpp = cal.get("words_per_page", DEFAULT_WORDS_PER_PAGE) if cal else DEFAULT_WORDS_PER_PAGE
     offset = cal.get("epub_chapter_offset", 0) if cal else 0
     return {
-        "is_calibrated": cal is not None,
+        "is_calibrated": cal is not None and "words_per_page" in cal,
         "words_per_page": wpp,
         "total_words": tw,
         "total_pages": max(1, round(tw / wpp)),
