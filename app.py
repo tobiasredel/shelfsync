@@ -94,6 +94,7 @@ _epub_cache: OrderedDict[str, list[dict]] = OrderedDict()
 # Calibration persistence (thread-safe)
 # ---------------------------------------------------------------------------
 _calibration_lock = threading.Lock()
+_favorites_lock = threading.Lock()
 
 
 def _calibration_path() -> Path:
@@ -165,6 +166,30 @@ def set_chapter_offset(item_id: str, offset: int):
         existing["epub_chapter_offset"] = max(0, offset)
         cal[item_id] = existing
         cal_path.write_text(json.dumps(cal, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Favorites persistence (thread-safe)
+# ---------------------------------------------------------------------------
+def _favorites_path() -> Path:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return DATA_DIR / "favorites.json"
+
+
+def load_favorites() -> list[str]:
+    with _favorites_lock:
+        p = _favorites_path()
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                return []
+        return []
+
+
+def save_favorites(data: list[str]):
+    with _favorites_lock:
+        _favorites_path().write_text(json.dumps(data, indent=2))
 
 
 # ---------------------------------------------------------------------------
@@ -478,6 +503,7 @@ async def get_library_items():
     ))
     items = []
     cal_data = load_calibrations()
+    fav_data = load_favorites()
     for resp in detail_resps:
         resp.raise_for_status()
         item = resp.json()
@@ -492,6 +518,7 @@ async def get_library_items():
             "cover": f"/api/cover/{item['id']}",
             "has_epub": _find_epub_file(item) is not None,
             "is_calibrated": cal is not None,
+            "is_favorite": item["id"] in fav_data,
         })
     return items
 
@@ -729,6 +756,25 @@ async def cover_proxy(item_id: str):
         return Response(content=r.content, media_type=ct)
     except Exception:
         return Response(status_code=404)
+
+
+# --- Favorites ---
+@app.post("/api/favorites/{item_id}")
+async def add_favorite(item_id: str):
+    favs = load_favorites()
+    if item_id not in favs:
+        favs.append(item_id)
+        save_favorites(favs)
+    return {"is_favorite": True}
+
+
+@app.delete("/api/favorites/{item_id}")
+async def remove_favorite(item_id: str):
+    favs = load_favorites()
+    if item_id in favs:
+        favs.remove(item_id)
+        save_favorites(favs)
+    return {"is_favorite": False}
 
 
 # --- Calibration ---

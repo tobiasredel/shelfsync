@@ -31,6 +31,15 @@
         .badge{display:inline-flex;font-size:.68rem;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:.15rem .45rem;border-radius:4px}
         .badge-green{background:var(--green-dim);color:var(--green)}.badge-red{background:rgba(232,84,84,.1);color:var(--danger)}.badge-purple{background:var(--purple-dim);color:var(--purple)}
         .book-progress{font-size:.75rem;color:var(--accent);font-weight:500;flex-shrink:0}
+        .book-search{width:100%;padding:.6rem .9rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.88rem;outline:none;transition:border-color .2s;margin-bottom:.5rem}
+        .book-search:focus{border-color:var(--accent)}
+        .book-search::placeholder{color:var(--text-muted)}
+        .filter-row{display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem}
+        .filter-btn{padding:.3rem .7rem;background:var(--surface);border:1px solid var(--border);border-radius:20px;color:var(--text-muted);font-size:.78rem;cursor:pointer;transition:all .15s;font-family:inherit}
+        .filter-btn:hover{border-color:var(--accent);color:var(--accent)}
+        .filter-btn.active{border-color:var(--accent);background:var(--accent-glow);color:var(--accent)}
+        .book-fav{background:none;border:none;font-size:1.1rem;cursor:pointer;padding:.2rem .4rem;flex-shrink:0;transition:transform .15s;line-height:1;color:var(--text-muted)}
+        .book-fav:hover{transform:scale(1.2)}.book-fav.is-fav{color:var(--accent)}
 
         /* Position display */
         .pos-box{display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2rem 1.5rem;margin-bottom:1.5rem}
@@ -132,6 +141,10 @@
     <div class="status-bar"><div class="status-dot checking" id="sDot"></div><span class="status-text" id="sTxt">Verbinde…</span></div>
 
     <div class="sl">Hörbuch auswählen</div>
+    <input type="text" class="book-search" id="bSearch" placeholder="Suche nach Titel oder Autor..." oninput="filterBooks()">
+    <div class="filter-row">
+        <button class="filter-btn" id="favFilter" onclick="toggleFavFilter()">★ Nur Favoriten</button>
+    </div>
     <div class="book-list" id="bList"><div style="padding:2rem;text-align:center;color:var(--text-muted);font-size:.88rem">Lade…</div></div>
 
     <!-- Position -->
@@ -250,7 +263,7 @@
 </div>
 
 <script>
-let sel=null,style='concise',books=[],lastTs=null;
+let sel=null,style='concise',books=[],lastTs=null,showFavsOnly=false;
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
 
 document.addEventListener('DOMContentLoaded',async()=>{
@@ -267,19 +280,73 @@ function st(s,t){$('#sDot').className='status-dot'+(s==='off'?' offline':s==='ch
 function fmt(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h>0?`${h}h ${m}m`:`${m}m`}
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML}
 
+function getFilteredBooks(){
+    let fb=[...books];
+    const q=($('#bSearch').value||'').toLowerCase().trim();
+    if(q) fb=fb.filter(b=>b.title.toLowerCase().includes(q)||b.author.toLowerCase().includes(q));
+    if(showFavsOnly) fb=fb.filter(b=>b.is_favorite);
+    fb.sort((a,b)=>{
+        if(a.is_favorite!==b.is_favorite) return a.is_favorite?-1:1;
+        return a.title.localeCompare(b.title);
+    });
+    return fb;
+}
+
 function renderBooks(){
     const l=$('#bList');
-    if(!books.length){l.innerHTML='<div style="padding:2rem;text-align:center;color:var(--text-muted)">Keine Bücher</div>';return}
-    l.innerHTML=books.map(b=>`
-        <div class="book-item ${b.has_epub?'':'no-epub'}" data-id="${b.id}" onclick="${b.has_epub?`pickBook('${b.id}')`:''}">
-            <img class="book-cover" src="${b.cover}" alt="" onerror="this.style.display='none'">
-            <div class="book-info"><div class="book-title">${esc(b.title)}</div>
-            <div class="book-meta"><span>${esc(b.author)}</span>
-                <span class="badge ${b.has_epub?'badge-green':'badge-red'}">${b.has_epub?'✓ EPUB':'✗ EPUB'}</span>
-                ${b.is_calibrated?'<span class="badge badge-purple">⚙ kalibriert</span>':''}
-            </div></div>
-            <div class="book-progress">${fmt(b.current_time)} / ${fmt(b.duration)}</div>
-        </div>`).join('');
+    const fb=getFilteredBooks();
+    if(!books.length){l.textContent='';const d=document.createElement('div');d.style.cssText='padding:2rem;text-align:center;color:var(--text-muted)';d.textContent='Keine Bücher';l.appendChild(d);return}
+    if(!fb.length){l.textContent='';const d=document.createElement('div');d.style.cssText='padding:2rem;text-align:center;color:var(--text-muted)';d.textContent='Keine Treffer';l.appendChild(d);return}
+    l.textContent='';
+    fb.forEach(b=>{
+        const item=document.createElement('div');
+        item.className='book-item'+(b.has_epub?'':' no-epub')+(sel&&sel.id===b.id?' selected':'');
+        item.dataset.id=b.id;
+        if(b.has_epub) item.onclick=()=>pickBook(b.id);
+
+        const fav=document.createElement('button');
+        fav.className='book-fav'+(b.is_favorite?' is-fav':'');
+        fav.textContent=b.is_favorite?'\u2605':'\u2606';
+        fav.title=b.is_favorite?'Favorit entfernen':'Als Favorit markieren';
+        fav.onclick=(e)=>{e.stopPropagation();toggleFav(b.id)};
+        item.appendChild(fav);
+
+        const img=document.createElement('img');
+        img.className='book-cover';img.src=b.cover;img.alt='';
+        img.onerror=function(){this.style.display='none'};
+        item.appendChild(img);
+
+        const info=document.createElement('div');info.className='book-info';
+        const title=document.createElement('div');title.className='book-title';title.textContent=b.title;
+        const meta=document.createElement('div');meta.className='book-meta';
+        const author=document.createElement('span');author.textContent=b.author;meta.appendChild(author);
+        const epubBadge=document.createElement('span');epubBadge.className='badge '+(b.has_epub?'badge-green':'badge-red');epubBadge.textContent=b.has_epub?'\u2713 EPUB':'\u2717 EPUB';meta.appendChild(epubBadge);
+        if(b.is_calibrated){const cb=document.createElement('span');cb.className='badge badge-purple';cb.textContent='\u2699 kalibriert';meta.appendChild(cb)}
+        info.appendChild(title);info.appendChild(meta);item.appendChild(info);
+
+        const prog=document.createElement('div');prog.className='book-progress';prog.textContent=fmt(b.current_time)+' / '+fmt(b.duration);
+        item.appendChild(prog);
+        l.appendChild(item);
+    });
+}
+
+function filterBooks(){renderBooks()}
+
+function toggleFavFilter(){
+    showFavsOnly=!showFavsOnly;
+    $('#favFilter').classList.toggle('active',showFavsOnly);
+    renderBooks();
+}
+
+async function toggleFav(id){
+    const b=books.find(x=>x.id===id);if(!b)return;
+    const wasFav=b.is_favorite;
+    try{
+        const r=await fetch('/api/favorites/'+encodeURIComponent(id),{method:wasFav?'DELETE':'POST'});
+        if(!r.ok)return;
+        b.is_favorite=!wasFav;
+        renderBooks();
+    }catch(e){}
 }
 
 async function pickBook(id){
