@@ -2,11 +2,12 @@
 
 ## Project Overview
 
-**Audiobook Recap** is a self-hosted web tool that bridges audiobooks and eBooks. It connects to a user's **Audiobookshelf** instance, extracts text from EPUBs, and provides three core features:
+**Audiobook Recap** is a self-hosted web tool that bridges audiobooks and eBooks. It connects to a user's **Audiobookshelf** instance, extracts text from EPUBs, and provides four core features:
 
 1. **Recap** – Summarize a missed audiobook segment (e.g. "what happened between minute 45 and 55?") using EPUB text + GPT-4o-mini
 2. **Position Sync** – Show which Kindle page / percentage corresponds to the current audio position
 3. **Find & Jump** – Enter a Kindle page number or text passage → get the audio timestamp → optionally update the ABS listening position
+4. **Search & Favorites** – Filter the book list by title/author as you type; star books to pin them at the top, persisted across sessions
 
 The key insight is that EPUB text extraction replaces expensive Speech-to-Text (Whisper), making the tool ~14x cheaper (~$0.005 vs $0.07 per recap).
 
@@ -29,6 +30,7 @@ The key insight is that EPUB text extraction replaces expensive Speech-to-Text (
 │  - /api/sync-progress    → update ABS listening position    │
 │  - /api/calibrate/*      → per-book Kindle page calibration │
 │  - /api/calibration/:id  → get/delete calibration           │
+│  - /api/favorites/:id    → add/remove book favorites        │
 └──────┬──────────┬───────────────────────────────────────────┘
        │          │
        ▼          ▼
@@ -50,7 +52,7 @@ The key insight is that EPUB text extraction replaces expensive Speech-to-Text (
 | LLM | OpenAI API (gpt-4o-mini default) |
 | Frontend | Vanilla HTML/CSS/JS (single file, no build step) |
 | Fonts | Google Fonts: DM Sans + DM Serif Display |
-| Persistence | JSON file (`/data/calibration.json`) |
+| Persistence | JSON files in `DATA_DIR` (`calibration.json`, `favorites.json`, `epub_cache/`) |
 | Deployment | Docker, docker-compose, targeted at Synology NAS |
 
 ## File Structure
@@ -86,10 +88,17 @@ audiobook-recap/
 - Sanity-bounded to 50–600 words/page
 - Default fallback: 250 words/page
 
-### In-memory EPUB Cache
-- `_epub_cache` dict holds parsed EPUB chapters, keyed by item_id
-- Bounded to 20 entries (LRU-ish: oldest evicted)
-- Avoids re-downloading + re-parsing the same EPUB across requests
+### Favorites Persistence
+- Stored as a flat `list[str]` of item IDs in `/data/favorites.json`
+- Thread-safe via `_favorites_lock` (same pattern as calibrations)
+- Frontend sorts favorites to the top, then alphabetical within each group
+- Search filters across both favorited and non-favorited books
+
+### EPUB Cache (Memory + Disk)
+- `_epub_cache` (OrderedDict) holds parsed EPUB chapters in memory, keyed by item_id
+- Bounded to 20 entries (LRU: oldest evicted)
+- Backed by disk cache in `DATA_DIR/epub_cache/{item_id}.json`
+- Lookup order: memory → disk → download + parse (then populate both caches)
 
 ## Environment Variables
 
@@ -100,12 +109,15 @@ audiobook-recap/
 | `OPENAI_API_KEY` | ✅ | – | OpenAI API key (for GPT-4o-mini) |
 | `LLM_MODEL` | – | `gpt-4o-mini` | OpenAI model for summaries |
 | `SUMMARY_LANGUAGE` | – | `de` | Summary language (`de`, `en`) |
-| `DATA_DIR` | – | `/data` | Path for calibration.json persistence |
+| `DATA_DIR` | – | `/data` | Path for calibration.json, favorites.json, epub_cache/ |
+| `EPUB_MAX_SIZE_MB` | – | `100` | Max EPUB download size in MB |
+| `AUTH_USER` | – | – | Basic auth username (leave empty to disable auth) |
+| `AUTH_PASS` | – | – | Basic auth password |
 
 ## API Endpoints Reference
 
 ### `GET /api/books`
-Returns all library items with `has_epub` and `is_calibrated` flags.
+Returns all library items with `has_epub`, `is_calibrated`, and `is_favorite` flags.
 
 ### `GET /api/books/{item_id}/chapters`
 Returns audio chapter markers (title, start, end in seconds).
@@ -140,6 +152,12 @@ Maps audio position to word count, divides by kindle_page.
 ### `DELETE /api/calibration/{item_id}`
 Resets calibration to default.
 
+### `POST /api/favorites/{item_id}`
+Adds the book to the favorites list. Returns `{is_favorite: true}`. Idempotent.
+
+### `DELETE /api/favorites/{item_id}`
+Removes the book from the favorites list. Returns `{is_favorite: false}`. Idempotent.
+
 ### `POST /api/sync-progress?library_item_id=...&time_seconds=...`
 Updates the user's listening position in Audiobookshelf via `PATCH /api/me/progress/{id}`.
 
@@ -172,7 +190,7 @@ Reverse of above: find which EPUB chapter contains the char position, calculate 
 - **Async:** All ABS API calls are async (httpx.AsyncClient), LLM calls are sync (openai SDK)
 - **Error handling:** FastAPI HTTPException with German error messages for user-facing errors
 - **Variable names in app.py:** Abbreviated in mapping functions for density (ec=epub_chapters, ac=audio_chapters, etc.), descriptive in route handlers
-- **Frontend:** Minimal vanilla JS, no framework. CSS variables for theming. Short function/variable names in JS.
+- **Frontend:** Minimal vanilla JS, no framework. CSS variables for theming. Short function/variable names in JS. Book list uses DOM API (createElement/textContent) instead of innerHTML to avoid XSS.
 - **No tests yet** – this is a prototype
 
 ## Known Limitations & Issues
@@ -183,27 +201,24 @@ Reverse of above: find which EPUB chapter contains the char position, calculate 
 
 3. **No EPUB3 Navigation Document support:** Currently relies on spine order + heading extraction for chapter titles, doesn't parse the nav document.
 
-4. **Cache is not persisted:** EPUB cache is in-memory and lost on restart. First request per book after restart will be slower.
+4. **Calibration assumes linear reading speed:** The audio narration speed is assumed constant. Variable-speed narration or books with many illustrations will reduce accuracy.
 
-5. **Calibration assumes linear reading speed:** The audio narration speed is assumed constant. Variable-speed narration or books with many illustrations will reduce accuracy.
-
-6. **Sync is one-way:** Can push audio position to ABS, but doesn't read/push Kindle position (Kindle doesn't have an open API).
-
-7. **No auth:** The web UI has no authentication. Relies on network-level security (LAN only / reverse proxy with auth).
+5. **Sync is one-way:** Can push audio position to ABS, but doesn't read/push Kindle position (Kindle doesn't have an open API).
 
 ## Roadmap / Open Tasks
 
-### High Priority
-- [ ] **Offset correction for front matter**: Add UI to let users set an EPUB chapter offset (e.g. "EPUB chapters 1-3 are front matter, audio starts at EPUB chapter 4"). Persist in calibration.json.
-- [ ] **Error handling improvements**: Graceful handling when ABS is unreachable mid-request, EPUB download fails, or OpenAI rate limits hit.
-- [ ] **Loading states for calibration**: Show spinner during calibration API calls.
+### Completed
+- [x] **Offset correction for front matter**: UI + API to set EPUB chapter offset, persisted in calibration.json.
+- [x] **EPUB cache persistence**: Disk cache in `DATA_DIR/epub_cache/{item_id}.json`, with LRU in-memory layer.
+- [x] **Support multiple EPUB files per book**: `_find_epub_file()` checks both `ebookFile` and `libraryFiles`.
+- [x] **Basic auth**: Optional HTTP Basic auth via `AUTH_USER`/`AUTH_PASS` env vars.
+- [x] **Search & Favorites**: Filter books by title/author; star books to pin them at the top.
+- [x] **LLM retry with backoff**: `_call_llm()` retries transient errors with exponential backoff.
+- [x] **Model-aware text chunking**: Long texts are split into chunks based on model context window, summarized in parallel, then merged.
 
 ### Medium Priority
-- [ ] **EPUB cache persistence**: Cache parsed EPUB text to disk (e.g. `/data/epub_cache/{item_id}.json`) to avoid re-parsing on restart.
-- [ ] **Support multiple EPUB files per book**: Some ABS setups may have multiple ebook files; currently only `ebookFile` (primary) is used.
 - [ ] **Whispersync-style auto-detection**: If user's ABS progress changes, auto-show the new position without manual page load.
 - [ ] **Reading speed calibration**: Instead of words-per-page, allow calibration by narration speed (words/minute audio) for better proportional mapping.
-- [ ] **Basic auth**: Add optional username/password via environment variables.
 
 ### Low Priority / Nice-to-Have
 - [ ] **Bookmark integration**: Read/write ABS bookmarks for "I fell asleep here" markers.
