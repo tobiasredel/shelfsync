@@ -352,6 +352,12 @@ class CalibrateByTotalRequest(BaseModel):
     total_kindle_pages: int
 
 
+class CalibrateByWppRequest(BaseModel):
+    """User sets words-per-page directly."""
+    library_item_id: str
+    words_per_page: float
+
+
 class CalibrateResponse(BaseModel):
     words_per_page: float
     total_pages: int
@@ -1832,6 +1838,20 @@ async def calibrate_by_total(req: CalibrateByTotalRequest):
         words_per_page=round(wpp, 1),
         total_pages=max(1, round(tw / wpp)),
         method="by_total",
+    )
+
+
+@app.post("/api/calibrate/by-wpp", response_model=CalibrateResponse)
+async def calibrate_by_wpp(req: CalibrateByWppRequest):
+    """Calibrate by setting words-per-page directly."""
+    ec, _, _ = await get_epub_chapters(req.library_item_id)
+    tw = _total_words(ec)
+    wpp = max(50, min(600, req.words_per_page))
+    set_calibration(req.library_item_id, wpp, "by_wpp")
+    return CalibrateResponse(
+        words_per_page=round(wpp, 1),
+        total_pages=max(1, round(tw / wpp)),
+        method="by_wpp",
     )
 
 
