@@ -226,6 +226,7 @@ def _mapping_quality_label(
     mapping: list[tuple[int, int]],
     audio_ch: list[dict],
     epub_ch: list[dict],
+    anchors: list[tuple[float, int]] | None = None,
 ) -> str:
     """Return a human-readable quality label for the chapter mapping."""
     if not audio_ch or not epub_ch:
@@ -233,6 +234,9 @@ def _mapping_quality_label(
     n_audio = len(audio_ch)
     n_matched = len(mapping)
     if n_matched == 0:
+        # Check if we have WPM-based anchors (no chapter match but still useful)
+        if anchors and len(anchors) >= 3:
+            return "wpm"
         return "legacy"
     ratio = n_matched / max(n_audio, 1)
     if ratio >= 0.7:
@@ -651,17 +655,135 @@ def _match_chapters_by_title(
     return monotonic
 
 
+def _match_by_boundary_alignment(
+    audio_ch: list[dict],
+    epub_ch: list[dict],
+    offset: int = 0,
+) -> list[tuple[int, int]]:
+    """Match chapter boundaries by cumulative fractional position.
+
+    If audio chapter 3 starts at 30% of total duration and EPUB chapter 5
+    starts at 31% of total words, they likely correspond. This works even
+    when chapter titles are completely different (e.g. "Track 01" vs
+    "Der Anfang").
+
+    The tolerance adapts: stricter when both sides have similar chapter
+    counts, looser when they differ a lot.
+    """
+    if not audio_ch or not epub_ch:
+        return []
+    total_dur = audio_ch[-1].get("end", 0)
+    epub_chs = epub_ch[offset:]
+    total_words = sum(e["word_count"] for e in epub_chs)
+    if total_dur <= 0 or total_words <= 0:
+        return []
+
+    # Compute cumulative fraction at each chapter START
+    audio_fracs: list[tuple[float, int]] = []  # (fraction, original_idx)
+    for i, a in enumerate(audio_ch):
+        audio_fracs.append((a["start"] / total_dur, i))
+
+    epub_fracs: list[tuple[float, int]] = []  # (fraction, original_idx)
+    cum_w = 0
+    for i, e in enumerate(epub_chs):
+        epub_fracs.append((cum_w / total_words, i + offset))
+        cum_w += e["word_count"]
+
+    # Adaptive tolerance based on chapter count ratio
+    n_ratio = min(len(audio_ch), len(epub_chs)) / max(len(audio_ch), len(epub_chs))
+    tolerance = 0.03 if n_ratio > 0.8 else 0.06 if n_ratio > 0.5 else 0.10
+
+    # Greedy matching: for each audio boundary, find closest EPUB boundary
+    used_epub: set[int] = set()
+    matches: list[tuple[float, int, int]] = []  # (distance, audio_idx, epub_idx)
+
+    for a_frac, ai in audio_fracs:
+        best_dist, best_ei = tolerance, -1
+        for e_frac, ei in epub_fracs:
+            if ei in used_epub:
+                continue
+            dist = abs(a_frac - e_frac)
+            if dist < best_dist:
+                best_dist, best_ei = dist, ei
+        if best_ei >= 0:
+            matches.append((best_dist, ai, best_ei))
+            used_epub.add(best_ei)
+
+    # Sort by audio index
+    matches.sort(key=lambda x: x[1])
+
+    # Enforce strict monotonicity
+    monotonic: list[tuple[int, int]] = []
+    for _, ai, ei in matches:
+        if not monotonic or ei > monotonic[-1][1]:
+            monotonic.append((ai, ei))
+
+    return monotonic
+
+
+def _build_wpm_anchors(
+    audio_ch: list[dict],
+    epub_ch: list[dict],
+    total_dur: float,
+    offset: int = 0,
+) -> list[tuple[float, int]]:
+    """Build anchor points using WPM estimation (no chapter matching needed).
+
+    Assumes constant narration speed. Creates an anchor at each EPUB chapter
+    boundary based on the estimated reading position at that word count.
+
+    This is more accurate than proportional index mapping because it accounts
+    for chapters of different lengths.
+    """
+    epub_chs = epub_ch[offset:]
+    total_words = sum(e["word_count"] for e in epub_chs)
+    if total_words <= 0 or total_dur <= 0:
+        return []
+
+    wpm = total_words / (total_dur / 60)  # words per minute
+
+    # Pre-offset char count
+    pre_offset_chars = sum(e["char_count"] + 1 for e in epub_ch[:offset])
+
+    anchors: list[tuple[float, int]] = [(0.0, 0)]
+    cum_words = 0
+    cum_chars = pre_offset_chars
+    for e in epub_chs:
+        cum_words += e["word_count"]
+        cum_chars += e["char_count"] + 1
+        estimated_time = (cum_words / wpm) * 60  # seconds
+        # Clamp to total duration
+        estimated_time = min(estimated_time, total_dur)
+        anchors.append((estimated_time, cum_chars))
+
+    return anchors
+
+
 def _get_chapter_mapping(
     audio_ch: list[dict],
     epub_ch: list[dict],
     offset: int = 0,
     item_id: str | None = None,
 ) -> list[tuple[int, int]]:
-    """Get (cached) chapter mapping for a book."""
+    """Get (cached) chapter mapping for a book.
+
+    Tries strategies in order:
+    1. Title matching (fuzzy + number-based)
+    2. Boundary alignment (cumulative fraction matching)
+    """
     cache_key = f"{item_id}:{offset}" if item_id else None
     if cache_key and cache_key in _chapter_mapping_cache:
         return _chapter_mapping_cache[cache_key]
+
+    # Strategy 1: Title matching
     mapping = _match_chapters_by_title(audio_ch, epub_ch, offset)
+
+    # Strategy 2: If title matching found < 2 pairs, try boundary alignment
+    if len(mapping) < 2 and len(audio_ch) >= 3 and len(epub_ch) >= 3:
+        boundary_mapping = _match_by_boundary_alignment(audio_ch, epub_ch, offset)
+        if len(boundary_mapping) > len(mapping):
+            mapping = boundary_mapping
+
     if cache_key:
         _chapter_mapping_cache[cache_key] = mapping
     return mapping
@@ -776,6 +898,11 @@ def _get_anchors(
 ) -> tuple[list[tuple[float, int]], list[tuple[int, int]]]:
     """Get anchor points and chapter mapping (with caching).
 
+    Tries in order:
+    1. Chapter mapping anchors (title + boundary matching)
+    2. WPM-based anchors (word-count proportional, no matching needed)
+    3. Simple start/end anchors (pure linear)
+
     Returns (anchors, mapping).
     """
     mapping = _get_chapter_mapping(audio_ch, epub_ch, offset, item_id)
@@ -786,6 +913,15 @@ def _get_anchors(
         return _anchor_cache[cache_key], mapping
 
     anchors = _build_anchor_points(audio_ch, epub_ch, mapping, total_dur, manual_anchors)
+
+    # If chapter matching produced too few anchors (just start+end),
+    # use WPM-based anchors as a better fallback
+    if len(anchors) <= 2 and len(epub_ch) >= 3 and not manual_anchors:
+        wpm_anchors = _build_wpm_anchors(audio_ch, epub_ch, total_dur, offset)
+        if len(wpm_anchors) > len(anchors):
+            anchors = wpm_anchors
+            # WPM anchors don't come from chapter matching, so mapping stays empty
+            # but we still get good interpolation
 
     if cache_key and not manual_anchors:
         _anchor_cache[cache_key] = anchors
@@ -820,8 +956,9 @@ def _time_to_char_position(
 ):
     """Map audio time → character position in EPUB full text.
 
-    Uses anchor-point interpolation when chapter title matching succeeds
-    (>= 2 matched chapters). Falls back to legacy proportional mapping.
+    Uses anchor-point interpolation when enough anchors are available
+    (from chapter matching, boundary alignment, or WPM estimation).
+    Falls back to legacy proportional mapping only as last resort.
 
     Returns: (char_offset, chapter_title, chapter_progress_pct)
     """
@@ -838,8 +975,8 @@ def _time_to_char_position(
 
     title, pct = _find_audio_chapter_at_time(audio_ch, time_sec)
 
-    if len(mapping) >= 2 and len(anchors) >= 3:
-        # Anchor-based interpolation (high accuracy)
+    if len(anchors) >= 3:
+        # Anchor-based interpolation (from title match, boundary align, or WPM)
         char_pos = _interpolate_time_to_char(anchors, time_sec)
         char_pos = max(0, min(char_pos, len(full_text) - 1))
         return char_pos, title, pct
@@ -886,7 +1023,7 @@ def _char_position_to_time(
         audio_ch, epub_ch, total_dur, offset, item_id, manual_anchors,
     )
 
-    if len(mapping) >= 2 and len(anchors) >= 3:
+    if len(anchors) >= 3:
         t = _interpolate_char_to_time(anchors, char_pos)
         t = max(0.0, min(t, total_dur))
         title, _ = _find_audio_chapter_at_time(audio_ch, t)
@@ -942,8 +1079,8 @@ def map_time_to_text(
         audio_ch, epub_ch, total_dur, offset, item_id,
     )
 
-    if len(mapping) >= 2 and len(anchors) >= 3:
-        # High-accuracy: map start/end to char positions via anchors
+    if len(anchors) >= 3:
+        # Anchor-based: map start/end to char positions via interpolation
         full = _build_full_text(epub_ch, item_id)
         c0 = _interpolate_time_to_char(anchors, start_sec)
         c1 = _interpolate_time_to_char(anchors, end_sec)
@@ -1575,7 +1712,7 @@ async def get_chapter_mapping_endpoint(item_id: str):
     ]
 
     return {
-        "quality": _mapping_quality_label(mapping, ac, ec),
+        "quality": _mapping_quality_label(mapping, ac, ec, anchors),
         "matched_count": len(mapping),
         "audio_chapter_count": len(ac),
         "epub_chapter_count": len(ec),
@@ -1614,12 +1751,13 @@ async def get_position(req: PositionRequest):
     if i != -1: e = i
     # Determine mapping quality
     mapping = _get_chapter_mapping(ac, ec, offset, req.library_item_id)
+    pos_anchors, _ = _get_anchors(ac, ec, dur, offset, req.library_item_id, manual)
     return PositionResponse(estimated_page=page, total_pages=tp, percentage=pct,
                             chapter_title=ct, chapter_progress_pct=round(cpct, 1),
                             nearby_text=full[s:e],
                             is_calibrated=get_words_per_page(req.library_item_id) is not None,
                             words_per_page=wpp,
-                            mapping_quality=_mapping_quality_label(mapping, ac, ec),
+                            mapping_quality=_mapping_quality_label(mapping, ac, ec, pos_anchors),
                             matched_chapters=len(mapping))
 
 

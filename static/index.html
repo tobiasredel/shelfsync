@@ -394,6 +394,8 @@ async function loadPos(){
             ?'<span class="badge badge-amber">Mapping: mittel</span>'
             :d.mapping_quality==='low'
             ?'<span class="badge badge-amber">Mapping: niedrig</span>'
+            :d.mapping_quality==='wpm'
+            ?'<span class="badge badge-blue">Mapping: WPM</span>'
             :'<span class="badge" style="background:var(--bg);color:var(--text-muted)">Mapping: proportional</span>';
         const mcInfo = d.matched_chapters>0
             ?` <span style="font-size:.72rem;color:var(--text-muted)">(${d.matched_chapters} Kap. gematcht)</span>`:'';

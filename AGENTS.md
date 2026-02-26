@@ -172,32 +172,47 @@ Updates the user's listening position in Audiobookshelf via `PATCH /api/me/progr
 
 ### Anchor-Point Based Mapping (v2)
 
-The position sync system uses a **piecewise-linear interpolation** approach for accurate mapping between audio time and EPUB text position:
+The position sync system uses a **piecewise-linear interpolation** approach with a cascade of strategies:
+
+#### Strategy Cascade (in order of priority):
 
 1. **Chapter Title Matching** (`_match_chapters_by_title`):
    - Normalizes titles (strips "Chapter X:", "Kapitel XII –", etc.)
-   - Two strategies: fuzzy string matching (SequenceMatcher ≥ 0.55) and chapter number matching (Arabic/Roman numerals)
-   - Enforces monotonicity: matched pairs must be in order
-   - Cached per book+offset combination
+   - Fuzzy string matching (SequenceMatcher ≥ 0.55) + chapter number matching (Arabic/Roman)
+   - Enforces monotonicity; cached per book+offset
 
-2. **Anchor Points** (`_build_anchor_points`):
-   - Each matched chapter pair creates 2 anchors: (chapter_start_time, chapter_start_char) and (chapter_end_time, chapter_end_char)
-   - Book boundaries (0,0) and (total_dur, total_chars) always included
-   - Manual anchors from multi-point calibration merged in
-   - Monotonicity enforced (time and char_pos both increasing)
+2. **Boundary Alignment** (`_match_by_boundary_alignment`):
+   - Used when title matching finds < 2 pairs
+   - Compares cumulative fraction of audio time vs cumulative fraction of EPUB words
+   - Matches chapter boundaries that are within tolerance (3–10% depending on chapter count ratio)
+   - Works even when titles are completely different (e.g. "Track 01" vs "Der Anfang")
 
-3. **Piecewise-Linear Interpolation** (`_interpolate_time_to_char`, `_interpolate_char_to_time`):
-   - Binary search for surrounding anchor interval
-   - Linear interpolation within each interval
-   - O(log n) lookup via `bisect`
+3. **WPM-Based Anchors** (`_build_wpm_anchors`):
+   - Used when no chapter matching produces results
+   - Estimates narration speed: WPM = total_words / (total_duration / 60)
+   - Creates an anchor at each EPUB chapter boundary
+   - Much more accurate than index-based mapping because it accounts for chapter length differences
 
-4. **Fallback**: When < 2 chapters match, falls back to legacy proportional index mapping
+4. **Legacy Index Mapping** (last resort):
+   - Proportional chapter index scaling
+   - Only used when no other strategy produces ≥ 3 anchor points
+
+#### Anchor Points (`_build_anchor_points`):
+- Each matched chapter pair creates 2 anchors: (chapter_start_time, chapter_start_char) and (chapter_end_time, chapter_end_char)
+- Book boundaries (0,0) and (total_dur, total_chars) always included
+- Manual anchors from multi-point calibration merged in
+- Monotonicity enforced (time and char_pos both increasing)
+
+#### Interpolation (`_interpolate_time_to_char`, `_interpolate_char_to_time`):
+- Binary search for surrounding anchor interval (O(log n) via `bisect`)
+- Linear interpolation within each interval
 
 ### Mapping Quality Levels
-- **high**: ≥ 70% of audio chapters matched by title
+- **high**: ≥ 70% of audio chapters matched by title/boundary
 - **medium**: 30–70% matched
-- **low**: < 30% matched
-- **legacy**: No title matching possible, using proportional index scaling
+- **low**: < 30% matched (but still using matched anchors)
+- **wpm**: No chapter match, using WPM-estimated anchors
+- **legacy**: No anchors available, proportional index scaling
 
 ### Time → Text Mapping (`map_time_to_text`)
 1. If anchor-based mapping available: map start/end times to character positions via anchors
