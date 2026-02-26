@@ -270,24 +270,13 @@ def _mapping_quality_label(
     anchors: list[tuple[float, int]] | None = None,
     item_id: str | None = None,
 ) -> str:
-    """Return a human-readable quality label for the chapter mapping."""
-    if not audio_ch or not epub_ch:
-        return "legacy"
-    # Whisper anchors = highest quality automatic mapping
+    """Return a human-readable quality label for the mapping.
+
+    Whisper-only: returns 'whisper' if synced, 'none' otherwise.
+    """
     if item_id and get_whisper_anchors(item_id):
         return "whisper"
-    n_audio = len(audio_ch)
-    n_matched = len(mapping)
-    if n_matched == 0:
-        if anchors and len(anchors) >= 3:
-            return "wpm"
-        return "legacy"
-    ratio = n_matched / max(n_audio, 1)
-    if ratio >= 0.7:
-        return "high"
-    if ratio >= 0.3:
-        return "medium"
-    return "low"
+    return "none"
 
 
 # ---------------------------------------------------------------------------
@@ -947,50 +936,46 @@ def _get_anchors(
     item_id: str | None = None,
     manual_anchors: list[tuple[float, int]] | None = None,
 ) -> tuple[list[tuple[float, int]], list[tuple[int, int]]]:
-    """Get anchor points and chapter mapping (with caching).
+    """Get anchor points from Whisper sync (required).
 
-    Tries in order (merging where possible):
-    1. Chapter mapping anchors (title + boundary matching)
-    2. Whisper auto-sync anchors (persistent, from calibration.json)
-    3. Manual anchors (from multi-point calibration)
-    4. WPM-based anchors (word-count proportional, no matching needed)
-    5. Simple start/end anchors (pure linear)
+    Whisper-only mode: only Whisper auto-sync anchors are used for mapping.
+    No chapter-matching, WPM, or legacy fallbacks.
+    Start/end boundaries are always added.
 
     Returns (anchors, mapping).
     """
     mapping = _get_chapter_mapping(audio_ch, epub_ch, offset, item_id)
-    cache_key = f"{item_id}:{offset}" if item_id else None
 
-    # Load whisper anchors (persistent, stored as char positions directly)
+    # Only Whisper anchors are used for position mapping
     whisper_anchors = _load_whisper_anchors(item_id) if item_id else None
 
-    # Don't cache if manual or whisper anchors exist (they can change)
-    has_extra = manual_anchors or whisper_anchors
-    if cache_key and not has_extra and cache_key in _anchor_cache:
-        return _anchor_cache[cache_key], mapping
-
-    # Merge all anchor sources
-    combined_manual = []
+    total_chars = sum(e["char_count"] + 1 for e in epub_ch)
+    # Build anchors from Whisper + start/end boundaries only
+    anchors: list[tuple[float, int]] = [(0.0, 0)]
     if whisper_anchors:
-        combined_manual.extend(whisper_anchors)
-    if manual_anchors:
-        combined_manual.extend(manual_anchors)
+        anchors.extend(whisper_anchors)
+    anchors.append((total_dur, total_chars))
 
-    anchors = _build_anchor_points(
-        audio_ch, epub_ch, mapping, total_dur,
-        combined_manual if combined_manual else None,
-    )
+    # Sort by time, deduplicate (keep last for same time)
+    anchors.sort(key=lambda x: (x[0], x[1]))
+    cleaned: list[tuple[float, int]] = [anchors[0]]
+    dropped = 0
+    for t, c in anchors[1:]:
+        if t > cleaned[-1][0] + 0.5:
+            if c >= cleaned[-1][1]:
+                cleaned.append((t, c))
+            else:
+                dropped += 1
+                logger.warning("Whisper-Anker bei %.0fs verworfen: char_pos %d < vorheriger %d",
+                               t, c, cleaned[-1][1])
+        else:
+            if c > cleaned[-1][1]:
+                cleaned[-1] = (t, c)
+    if dropped:
+        logger.warning("Whisper-Sync: %d von %d Ankern wegen Monotonie verworfen",
+                       dropped, len(anchors) - 2)
 
-    # If still too few anchors (just start+end), use WPM-based fallback
-    if len(anchors) <= 2 and len(epub_ch) >= 3 and not has_extra:
-        wpm_anchors = _build_wpm_anchors(audio_ch, epub_ch, total_dur, offset)
-        if len(wpm_anchors) > len(anchors):
-            anchors = wpm_anchors
-
-    if cache_key and not has_extra:
-        _anchor_cache[cache_key] = anchors
-
-    return anchors, mapping
+    return cleaned, mapping
 
 
 def _find_audio_chapter_at_time(audio_ch: list[dict], time_sec: float) -> tuple[str, float]:
@@ -1013,6 +998,21 @@ def _find_audio_chapter_at_time(audio_ch: list[dict], time_sec: float) -> tuple[
 
 # --- Main mapping functions (v2: anchor-based with fallback) ---
 
+def _find_epub_chapter_at_char(epub_ch: list[dict], char_pos: int) -> tuple[str, float]:
+    """Find the EPUB chapter and progress % at a given character position."""
+    cum = 0
+    for i, e in enumerate(epub_ch):
+        ch_end = cum + e["char_count"]
+        if char_pos <= ch_end:
+            pct = (char_pos - cum) / max(e["char_count"], 1) * 100
+            return e.get("title", f"Kapitel {i + 1}"), max(0, min(100, pct))
+        cum = ch_end + 1  # +1 for space between chapters
+    # Past the end
+    if epub_ch:
+        return epub_ch[-1].get("title", f"Kapitel {len(epub_ch)}"), 100.0
+    return "(unbekannt)", 0.0
+
+
 def _time_to_char_position(
     audio_ch, epub_ch, time_sec, total_dur,
     offset: int = 0, item_id: str | None = None,
@@ -1020,51 +1020,25 @@ def _time_to_char_position(
 ):
     """Map audio time → character position in EPUB full text.
 
-    Uses anchor-point interpolation when enough anchors are available
-    (from chapter matching, boundary alignment, or WPM estimation).
-    Falls back to legacy proportional mapping only as last resort.
+    Whisper-only: uses Whisper anchor interpolation with start/end boundaries.
+    Linear interpolation between start and end if no Whisper anchors exist.
 
-    Returns: (char_offset, chapter_title, chapter_progress_pct)
+    Returns: (char_offset, epub_chapter_title, epub_chapter_progress_pct)
     """
     full_text = _build_full_text(epub_ch, item_id)
 
-    if not audio_ch:
-        ratio = time_sec / max(total_dur, 1)
-        return int(len(full_text) * ratio), "(geschätzt)", ratio * 100
-
-    # Try anchor-based mapping
+    # Get Whisper-based anchors (+ start/end boundaries)
     anchors, mapping = _get_anchors(
         audio_ch, epub_ch, total_dur, offset, item_id, manual_anchors,
     )
 
-    title, pct = _find_audio_chapter_at_time(audio_ch, time_sec)
+    # Interpolate using anchors (always at least start+end)
+    char_pos = _interpolate_time_to_char(anchors, time_sec)
+    char_pos = max(0, min(char_pos, len(full_text) - 1))
 
-    if len(anchors) >= 3:
-        # Anchor-based interpolation (from title match, boundary align, or WPM)
-        char_pos = _interpolate_time_to_char(anchors, time_sec)
-        char_pos = max(0, min(char_pos, len(full_text) - 1))
-        return char_pos, title, pct
-
-    # Fallback: legacy proportional chapter-index mapping
-    cur, ci = audio_ch[0], 0
-    for i, a in enumerate(audio_ch):
-        if a["start"] <= time_sec < a.get("end", a["start"]):
-            cur, ci = a, i
-            break
-        if a["start"] <= time_sec:
-            cur, ci = a, i
-    cs, ce = cur["start"], cur.get("end", cur["start"])
-    cd = ce - cs
-    cp = max(0, min(1, (time_sec - cs) / max(cd, 1)))
-    epub_idx = _audio_to_epub_idx(ci, len(audio_ch), len(epub_ch), offset)
-    co = 0
-    for i, e in enumerate(epub_ch):
-        if i < epub_idx:
-            co += e["char_count"] + 1
-        elif i == epub_idx:
-            co += int(e["char_count"] * cp)
-            break
-    return min(co, len(full_text) - 1), cur.get("title", ""), cp * 100
+    # Determine EPUB chapter from char position
+    title, pct = _find_epub_chapter_at_char(epub_ch, char_pos)
+    return char_pos, title, pct
 
 
 def _char_position_to_time(
@@ -1074,36 +1048,21 @@ def _char_position_to_time(
 ):
     """Map character position → audio time.
 
-    Uses anchor-point interpolation when available, falls back to legacy.
+    Whisper-only: uses Whisper anchor interpolation with start/end boundaries.
 
     Returns: (audio_time_seconds, chapter_title)
     """
-    if not audio_ch or not epub_ch:
-        full = _build_full_text(epub_ch, item_id)
-        return (char_pos / max(len(full), 1)) * total_dur, "(geschätzt)"
-
-    # Try anchor-based mapping
+    # Get Whisper-based anchors (+ start/end boundaries)
     anchors, mapping = _get_anchors(
         audio_ch, epub_ch, total_dur, offset, item_id, manual_anchors,
     )
 
-    if len(anchors) >= 3:
-        t = _interpolate_char_to_time(anchors, char_pos)
-        t = max(0.0, min(t, total_dur))
+    t = _interpolate_char_to_time(anchors, char_pos)
+    t = max(0.0, min(t, total_dur))
+    title = "(geschätzt)"
+    if audio_ch:
         title, _ = _find_audio_chapter_at_time(audio_ch, t)
-        return t, title
-
-    # Fallback: legacy proportional mapping
-    cum, ti, ep = 0, 0, 0.0
-    for i, e in enumerate(epub_ch):
-        if cum + e["char_count"] >= char_pos:
-            ti, ep = i, (char_pos - cum) / max(e["char_count"], 1)
-            break
-        cum += e["char_count"] + 1
-        ti, ep = i, 1.0
-    ai = _epub_to_audio_idx(ti, len(audio_ch), len(epub_ch), offset)
-    a = audio_ch[ai]
-    return a["start"] + (a.get("end", a["start"]) - a["start"]) * ep, a.get("title", "")
+    return t, title
 
 
 def _format_time(s):
@@ -1538,9 +1497,12 @@ def _find_text_in_epub(
     step = max(1, n // 6)  # Slide by ~1/6 of needle length for speed
 
     # Track character positions: we need to map word index → char offset
-    # Pre-compute word start positions in the region
+    # IMPORTANT: use the same normalization as _normalize_for_matching so that
+    # word indices align. The regex replaces each punctuation char with a single
+    # space, preserving character offsets in the original region.
+    normalized_region = re.sub(r'[^\w\s\-äöüàáâèéêìíîòóôùúûß]', ' ', region.lower())
     word_char_starts: list[int] = []
-    for m in re.finditer(r'\S+', region.lower()):
+    for m in re.finditer(r'\S+', normalized_region):
         word_char_starts.append(m.start())
 
     for i in range(0, len(haystack_words) - n + 1, step):
