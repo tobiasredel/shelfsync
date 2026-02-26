@@ -523,6 +523,7 @@ document.addEventListener('DOMContentLoaded',async()=>{
         // Fetch details for all currently-reading books in parallel
         const crBooks=books.filter(b=>b.is_currently_reading&&b.has_epub);
         if(crBooks.length){
+            // Fetch details (has_epub, is_calibrated) for all CR books
             await Promise.all(crBooks.map(async b=>{
                 try{
                     const dr=await(await fetch('/api/books/'+encodeURIComponent(b.id)+'/details')).json();
@@ -530,6 +531,8 @@ document.addEventListener('DOMContentLoaded',async()=>{
                 }catch(e){}
             }));
             renderCR();
+            // Fetch position data (page, percentage, chapter) for all CR books
+            crBooks.forEach(b=>loadCRPosition(b));
         }
         if(!crBooks.length){
             // No CR books — auto-expand library
@@ -575,8 +578,14 @@ function renderCR(){
 
         if(dc){
             const detail=document.createElement('div');detail.className='cr-detail';
-            let detailText=pct(b)+'% gehört';
-            if(dc.is_calibrated) detailText+=' \u00b7 Sync aktiv';
+            let detailText='';
+            if(dc.position){
+                detailText='S. '+dc.position.estimated_page+'/'+dc.position.total_pages+' · '+dc.position.percentage+'%';
+                if(dc.position.chapter_title) detailText+=' · '+dc.position.chapter_title;
+            }else{
+                detailText=pct(b)+'% gehört';
+            }
+            if(dc.is_calibrated) detailText+=' · Sync aktiv';
             detail.textContent=detailText;
             info.appendChild(detail);
         }
@@ -604,6 +613,15 @@ function toggleLibrary(){
     }
 }
 
+async function loadCRPosition(b){
+    try{
+        const pos=await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_item_id:b.id,current_time_seconds:b.current_time})})).json();
+        if(detailsCache[b.id]) detailsCache[b.id].position=pos;
+        renderCR();
+    }catch(e){}
+}
+
 async function addCR(id){
     const b=books.find(x=>x.id===id);
     if(!b)return;
@@ -622,6 +640,8 @@ async function addCR(id){
         }
         await fetch('/api/currently-reading/'+encodeURIComponent(id),{method:'POST'});
         renderCR();
+        // Fetch position data (page, percentage, chapter)
+        loadCRPosition(b);
     }catch(e){
         // Network error — revert
         b.is_currently_reading=false;
