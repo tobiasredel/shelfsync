@@ -17,6 +17,9 @@ services:
       - LLM_MODEL=gpt-4o-mini
       - SUMMARY_LANGUAGE=de
       - DATA_DIR=/data
+      # --- KOREADER SYNC (kosync) ---
+      # - KOSYNC_ENABLED=true           # Enable KOReader bidirectional sync
+      # - KOSYNC_SYNC_INTERVAL=60       # ABS→KOReader poll interval in seconds
     # If ABS runs in another docker network:
     # networks:
     #   - audiobookshelf_default

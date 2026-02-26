@@ -5,6 +5,7 @@ Audiobook Recap v4 – Recap + Position Sync + Dynamic Calibration
 import asyncio
 import base64
 import bisect
+import hashlib
 import html as html_mod
 import io
 import json
@@ -16,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time as time_mod
 import zipfile
 from collections import OrderedDict
 from contextlib import asynccontextmanager
@@ -45,6 +47,10 @@ EPUB_MAX_SIZE_MB = int(os.getenv("EPUB_MAX_SIZE_MB", "100"))
 AUTH_USER = os.getenv("AUTH_USER", "")
 AUTH_PASS = os.getenv("AUTH_PASS", "")
 
+# KOReader Sync (kosync) – bidirectional sync between KOReader and Audiobookshelf
+KOSYNC_ENABLED = os.getenv("KOSYNC_ENABLED", "false").lower() in ("true", "1", "yes")
+KOSYNC_SYNC_INTERVAL = int(os.getenv("KOSYNC_SYNC_INTERVAL", "60"))
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("audiobook-recap")
 
@@ -55,8 +61,11 @@ logger = logging.getLogger("audiobook-recap")
 async def verify_auth(request: Request):
     if not AUTH_USER:
         return
-    # Allow health check without auth
+    # Allow health check and kosync endpoints without basic auth
+    # (kosync uses its own x-auth-user/x-auth-key headers)
     if request.url.path == "/api/health":
+        return
+    if request.url.path.startswith("/kosync/"):
         return
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Basic "):
@@ -83,7 +92,17 @@ _http_client: httpx.AsyncClient | None = None
 async def lifespan(app: FastAPI):
     global _http_client
     _http_client = httpx.AsyncClient(timeout=30)
+    bg_task = None
+    if KOSYNC_ENABLED:
+        bg_task = asyncio.create_task(_abs_progress_watcher())
+        logger.info("KOReader Sync (kosync) enabled – polling ABS every %ds", KOSYNC_SYNC_INTERVAL)
     yield
+    if bg_task is not None:
+        bg_task.cancel()
+        try:
+            await bg_task
+        except asyncio.CancelledError:
+            pass
     await _http_client.aclose()
     _http_client = None
 
@@ -192,6 +211,83 @@ def save_currently_reading(item_id: Optional[str]):
         _currently_reading_path().write_text(
             json.dumps({"item_id": item_id}, indent=2)
         )
+
+
+# ---------------------------------------------------------------------------
+# KOReader Sync (kosync) persistence
+# ---------------------------------------------------------------------------
+_kosync_lock = threading.Lock()
+
+
+def _kosync_path() -> Path:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return DATA_DIR / "kosync.json"
+
+
+def _load_kosync() -> dict:
+    with _kosync_lock:
+        p = _kosync_path()
+        if p.exists():
+            try:
+                return json.loads(p.read_text())
+            except Exception:
+                return {"mappings": {}, "progress": {}, "abs_progress": {}}
+        return {"mappings": {}, "progress": {}, "abs_progress": {}}
+
+
+def _save_kosync(data: dict):
+    with _kosync_lock:
+        _kosync_path().write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _kosync_get_mapping(document: str) -> Optional[dict]:
+    """Get ABS item_id mapping for a kosync document hash."""
+    data = _load_kosync()
+    return data.get("mappings", {}).get(document)
+
+
+def _kosync_set_mapping(document: str, item_id: str, filename: str = ""):
+    """Map a kosync document hash to an ABS library item."""
+    data = _load_kosync()
+    data.setdefault("mappings", {})[document] = {
+        "item_id": item_id,
+        "filename": filename,
+        "created": int(time_mod.time()),
+    }
+    _save_kosync(data)
+    logger.info("Kosync mapping: %s -> %s (%s)", document[:12], item_id[:8], filename)
+
+
+def _kosync_get_progress(document: str) -> Optional[dict]:
+    """Get stored progress for a kosync document."""
+    data = _load_kosync()
+    return data.get("progress", {}).get(document)
+
+
+def _kosync_set_progress(document: str, progress: dict, source: str = "koreader"):
+    """Store progress for a kosync document."""
+    data = _load_kosync()
+    data.setdefault("progress", {})[document] = {
+        **progress,
+        "timestamp": int(time_mod.time()),
+        "source": source,
+    }
+    _save_kosync(data)
+
+
+def _kosync_set_abs_progress(item_id: str, current_time: float):
+    """Track the last known ABS progress for loop prevention."""
+    data = _load_kosync()
+    data.setdefault("abs_progress", {})[item_id] = {
+        "current_time": current_time,
+        "last_sync": int(time_mod.time()),
+    }
+    _save_kosync(data)
+
+
+def _compute_epub_partial_md5(epub_bytes: bytes) -> str:
+    """Compute partial MD5 (first 10KB) matching KOReader's doc_digest."""
+    return hashlib.md5(epub_bytes[:10000]).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -677,11 +773,17 @@ async def get_epub_chapters(item_id):
         ec = _load_cached_epub_from_disk(item_id)
         if not ec:
             # 3. Download + parse
-            eb = await download_epub(item_id, ef.get("ino", ef.get("metadata", {}).get("ino", "")))
+            ino = ef.get("ino", ef.get("metadata", {}).get("ino", ""))
+            eb = await download_epub(item_id, ino)
             ec = extract_text_from_epub(eb)
             if not ec:
                 raise HTTPException(status_code=500, detail="EPUB-Text konnte nicht extrahiert werden")
             _save_cached_epub_to_disk(item_id, ec)
+            # Auto-create kosync mapping from EPUB partial MD5
+            if KOSYNC_ENABLED:
+                doc_hash = _compute_epub_partial_md5(eb)
+                fname = ef.get("metadata", {}).get("filename", "")
+                _kosync_set_mapping(doc_hash, item_id, fname)
         _epub_cache[item_id] = ec
         if len(_epub_cache) > 20:
             evicted_id, _ = _epub_cache.popitem(last=False)
@@ -1450,3 +1552,299 @@ async def sync_progress(library_item_id: str, time_seconds: float):
     dur = item.get("media", {}).get("duration", 0)
     await update_abs_progress(library_item_id, time_seconds, dur)
     return {"status": "ok", "new_position": _format_time(time_seconds)}
+
+
+# ---------------------------------------------------------------------------
+# KOReader Sync (kosync) – protocol-compatible endpoints
+# ---------------------------------------------------------------------------
+# KOReader sends x-auth-user and x-auth-key headers for authentication.
+# These endpoints are exempt from the app's basic auth middleware.
+# Configure KOSYNC_ENABLED=true to activate.
+
+@app.post("/kosync/users/create")
+async def kosync_user_create(request: Request):
+    """Dummy user creation – always succeeds (auth handled by app's own system)."""
+    body = await request.json() if request.headers.get("content-type") else {}
+    return {"username": body.get("username", "koreader")}
+
+
+@app.post("/kosync/users/auth")
+async def kosync_user_auth(request: Request):
+    """Dummy auth – always succeeds."""
+    return {"authorized": "OK"}
+
+
+@app.put("/kosync/syncs/progress")
+async def kosync_put_progress(request: Request):
+    """KOReader pushes reading progress. Triggers sync to ABS if mapped."""
+    if not KOSYNC_ENABLED:
+        raise HTTPException(status_code=503, detail="KOReader Sync not enabled")
+
+    body = await request.json()
+    document = body.get("document", "")
+    if not document:
+        raise HTTPException(status_code=400, detail="Missing document field")
+
+    progress_data = {
+        "percentage": body.get("percentage", 0),
+        "progress": body.get("progress", ""),
+        "device": body.get("device", ""),
+        "device_id": body.get("device_id", ""),
+    }
+
+    _kosync_set_progress(document, progress_data, source="koreader")
+
+    # Sync to ABS if we have a mapping
+    mapping = _kosync_get_mapping(document)
+    if mapping:
+        item_id = mapping["item_id"]
+        pct = progress_data["percentage"]
+        try:
+            await _sync_koreader_to_abs(item_id, pct)
+            logger.info("Kosync → ABS: %s at %.1f%%", item_id[:8], pct * 100)
+        except Exception as e:
+            logger.warning("Kosync → ABS sync failed for %s: %s", item_id[:8], e)
+    else:
+        logger.info("Kosync progress for unmapped document %s (%.1f%%)",
+                     document[:12], progress_data["percentage"] * 100)
+
+    return {"document": document, "timestamp": int(time_mod.time())}
+
+
+@app.get("/kosync/syncs/progress/{document}")
+async def kosync_get_progress(document: str):
+    """KOReader pulls reading progress."""
+    if not KOSYNC_ENABLED:
+        raise HTTPException(status_code=503, detail="KOReader Sync not enabled")
+
+    progress = _kosync_get_progress(document)
+    if not progress:
+        # Return empty progress (KOReader handles this gracefully)
+        return {"document": document, "percentage": 0, "progress": "",
+                "device": "", "device_id": "", "timestamp": 0}
+
+    return {
+        "document": document,
+        "percentage": progress.get("percentage", 0),
+        "progress": progress.get("progress", ""),
+        "device": progress.get("device", ""),
+        "device_id": progress.get("device_id", ""),
+        "timestamp": progress.get("timestamp", 0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Kosync: KOReader → ABS sync helper
+# ---------------------------------------------------------------------------
+async def _sync_koreader_to_abs(item_id: str, percentage: float):
+    """Convert KOReader reading percentage to audio time and update ABS."""
+    ec, ac, dur = await get_epub_chapters(item_id)
+    total_chars = sum(e["char_count"] + 1 for e in ec)
+    char_pos = int(percentage * total_chars)
+    char_pos = max(0, min(char_pos, total_chars - 1))
+
+    audio_time, _ = _char_position_to_time(ec, char_pos, dur, item_id=item_id)
+    await update_abs_progress(item_id, audio_time, dur)
+    _kosync_set_abs_progress(item_id, audio_time)
+
+
+# ---------------------------------------------------------------------------
+# Kosync: ABS → KOReader background sync (polls ABS for progress changes)
+# ---------------------------------------------------------------------------
+async def _abs_progress_watcher():
+    """Background task: poll ABS progress and update kosync for KOReader."""
+    await asyncio.sleep(5)  # initial delay to let app start
+    while True:
+        try:
+            await _check_abs_progress_changes()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("ABS progress watcher error: %s", e)
+        await asyncio.sleep(KOSYNC_SYNC_INTERVAL)
+
+
+async def _check_abs_progress_changes():
+    """Check all mapped books for ABS progress changes and update kosync."""
+    data = _load_kosync()
+    mappings = data.get("mappings", {})
+    if not mappings:
+        return
+
+    # Build reverse map: item_id → document hash
+    item_to_doc: dict[str, str] = {}
+    for doc_hash, mapping in mappings.items():
+        item_to_doc[mapping["item_id"]] = doc_hash
+
+    if not item_to_doc:
+        return
+
+    # Fetch current ABS progress for all mapped items
+    try:
+        items = await get_library_items()
+    except Exception as e:
+        logger.debug("ABS progress poll failed: %s", e)
+        return
+
+    for item in items:
+        item_id = item["id"]
+        if item_id not in item_to_doc:
+            continue
+
+        current_time = item.get("current_time", 0)
+        doc_hash = item_to_doc[item_id]
+
+        # Check if ABS progress changed since we last synced
+        abs_prog = data.get("abs_progress", {}).get(item_id, {})
+        last_known = abs_prog.get("current_time", -1)
+
+        # Skip if no meaningful change (within 30s tolerance)
+        if abs(current_time - last_known) < 30:
+            continue
+
+        # Skip if the last kosync progress was set by koreader recently (< 2 min)
+        # to avoid bouncing changes back
+        kosync_prog = data.get("progress", {}).get(doc_hash, {})
+        if (kosync_prog.get("source") == "koreader"
+                and time_mod.time() - kosync_prog.get("timestamp", 0) < 120):
+            continue
+
+        # ABS progress changed — convert audio time to reading percentage
+        try:
+            if not item.get("has_epub"):
+                continue
+            ec, ac, dur = await get_epub_chapters(item_id)
+            total_chars = sum(e["char_count"] + 1 for e in ec)
+            char_pos, chapter_title, _ = _time_to_char_position(
+                ec, current_time, dur, item_id=item_id)
+            percentage = char_pos / max(total_chars, 1)
+            percentage = max(0.0, min(1.0, percentage))
+
+            _kosync_set_progress(doc_hash, {
+                "percentage": round(percentage, 6),
+                "progress": f"p{int(percentage * 100)}",
+                "device": "audiobookshelf",
+                "device_id": "abs-sync",
+            }, source="abs")
+            _kosync_set_abs_progress(item_id, current_time)
+
+            logger.info("ABS → Kosync: %s %.1f%% (chapter: %s)",
+                        item_id[:8], percentage * 100, chapter_title)
+        except Exception as e:
+            logger.warning("ABS → Kosync conversion failed for %s: %s", item_id[:8], e)
+
+
+# ---------------------------------------------------------------------------
+# Kosync: Management API
+# ---------------------------------------------------------------------------
+@app.get("/api/kosync/status")
+async def kosync_status():
+    """Overview of KOReader sync status."""
+    data = _load_kosync()
+    mappings = data.get("mappings", {})
+    progress = data.get("progress", {})
+    return {
+        "enabled": KOSYNC_ENABLED,
+        "sync_interval_seconds": KOSYNC_SYNC_INTERVAL,
+        "total_mappings": len(mappings),
+        "total_progress_entries": len(progress),
+        "mappings": {
+            doc: {
+                "item_id": m["item_id"],
+                "filename": m.get("filename", ""),
+                "has_progress": doc in progress,
+                "last_source": progress.get(doc, {}).get("source", ""),
+                "percentage": progress.get(doc, {}).get("percentage", 0),
+            }
+            for doc, m in mappings.items()
+        },
+    }
+
+
+@app.get("/api/kosync/mappings")
+async def kosync_list_mappings():
+    """List all document-to-item mappings."""
+    data = _load_kosync()
+    return {"mappings": data.get("mappings", {})}
+
+
+class KosyncMappingRequest(BaseModel):
+    document: str
+    item_id: str
+    filename: str = ""
+
+
+@app.post("/api/kosync/mappings")
+async def kosync_create_mapping(req: KosyncMappingRequest):
+    """Create or update a document-to-item mapping."""
+    _kosync_set_mapping(req.document, req.item_id, req.filename)
+    return {"status": "ok", "document": req.document, "item_id": req.item_id}
+
+
+@app.delete("/api/kosync/mappings/{document}")
+async def kosync_delete_mapping(document: str):
+    """Delete a document mapping."""
+    data = _load_kosync()
+    removed = data.get("mappings", {}).pop(document, None)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Mapping not found")
+    _save_kosync(data)
+    return {"status": "deleted", "document": document}
+
+
+@app.get("/api/kosync/unmapped")
+async def kosync_unmapped():
+    """List documents that have progress but no item mapping."""
+    data = _load_kosync()
+    mappings = data.get("mappings", {})
+    progress = data.get("progress", {})
+    unmapped = {
+        doc: {
+            "percentage": p.get("percentage", 0),
+            "device": p.get("device", ""),
+            "timestamp": p.get("timestamp", 0),
+        }
+        for doc, p in progress.items()
+        if doc not in mappings
+    }
+    return {"unmapped": unmapped}
+
+
+@app.post("/api/kosync/compute-hash/{item_id}")
+async def kosync_compute_hash(item_id: str):
+    """Download EPUB for a book and compute its partial MD5 for mapping.
+
+    This triggers the EPUB download (if not cached) and creates the mapping
+    automatically. Useful for pre-populating mappings before using KOReader.
+    """
+    if not KOSYNC_ENABLED:
+        raise HTTPException(status_code=503, detail="KOReader Sync not enabled")
+
+    item = await get_item_details(item_id)
+    ef = _find_epub_file(item)
+    if not ef:
+        raise HTTPException(status_code=400, detail="No EPUB found for this book")
+
+    ino = ef.get("ino", ef.get("metadata", {}).get("ino", ""))
+    eb = await download_epub(item_id, ino)
+    doc_hash = _compute_epub_partial_md5(eb)
+    fname = ef.get("metadata", {}).get("filename", "")
+    _kosync_set_mapping(doc_hash, item_id, fname)
+
+    # Also parse and cache the EPUB while we have it
+    if item_id not in _epub_cache:
+        ec = _load_cached_epub_from_disk(item_id)
+        if not ec:
+            ec = extract_text_from_epub(eb)
+            if ec:
+                _save_cached_epub_to_disk(item_id, ec)
+        if ec:
+            _epub_cache[item_id] = ec
+
+    md = item.get("media", {}).get("metadata", {})
+    return {
+        "document_hash": doc_hash,
+        "item_id": item_id,
+        "title": md.get("title", "Unknown"),
+        "filename": fname,
+    }

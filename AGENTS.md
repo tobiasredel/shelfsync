@@ -31,13 +31,15 @@ The key insight is that EPUB text extraction replaces expensive Speech-to-Text (
 │  - /api/calibrate/*      → per-book Kindle page calibration │
 │  - /api/calibration/:id  → get/delete calibration           │
 │  - /api/favorites/:id    → add/remove book favorites        │
-└──────┬──────────┬───────────────────────────────────────────┘
-       │          │
-       ▼          ▼
-  Audiobookshelf  OpenAI API
-  REST API        (GPT-4o-mini only)
-  - libraries     - chat.completions
-  - items
+│  - /kosync/*             → KOReader sync protocol           │
+│  - /api/kosync/*         → kosync management                │
+└──────┬──────────┬────────────────┬────────────────────────────┘
+       │          │                │
+       ▼          ▼                ▼
+  Audiobookshelf  OpenAI API   KOReader (Kindle)
+  REST API        (GPT-4o-mini)  kosync protocol
+  - libraries     - chat         - syncs/progress
+  - items         - completions
   - file download
   - user progress
 ```
@@ -52,7 +54,7 @@ The key insight is that EPUB text extraction replaces expensive Speech-to-Text (
 | LLM | OpenAI API (gpt-4o-mini default) |
 | Frontend | Vanilla HTML/CSS/JS (single file, no build step) |
 | Fonts | Google Fonts: DM Sans + DM Serif Display |
-| Persistence | JSON files in `DATA_DIR` (`calibration.json`, `currently_reading.json`, `epub_cache/`) |
+| Persistence | JSON files in `DATA_DIR` (`calibration.json`, `currently_reading.json`, `kosync.json`, `epub_cache/`) |
 | Deployment | Docker, docker-compose, targeted at Synology NAS |
 
 ## File Structure
@@ -103,6 +105,17 @@ audiobook-recap/
 - Backed by disk cache in `DATA_DIR/epub_cache/{item_id}.json`
 - Lookup order: memory → disk → download + parse (then populate both caches)
 
+### KOReader Sync (kosync)
+- Implements the kosync protocol so the app acts as a KOReader sync server
+- Bidirectional sync between KOReader (jailbroken Kindle) and Audiobookshelf
+- **KOReader → ABS**: KOReader pushes reading percentage → converted to char position → interpolated to audio time → ABS progress updated
+- **ABS → KOReader**: Background task polls ABS every `KOSYNC_SYNC_INTERVAL` seconds → detects audio progress changes → converts to reading percentage → stored for KOReader to pull
+- Document identification: KOReader uses partial MD5 (first 10KB) of the EPUB file; auto-computed when EPUB is downloaded from ABS
+- Loop prevention: tracks source of last progress update (koreader vs abs) and skips bounce-back within 2 minutes
+- Stored in `/data/kosync.json` with mappings (document hash → item_id), progress entries, and ABS progress tracking
+- kosync endpoints are exempt from basic auth (KOReader uses its own x-auth-user/x-auth-key headers)
+- Configure KOReader sync server URL as `http://<your-host>:8765/kosync`
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |
@@ -116,6 +129,8 @@ audiobook-recap/
 | `EPUB_MAX_SIZE_MB` | – | `100` | Max EPUB download size in MB |
 | `AUTH_USER` | – | – | Basic auth username (leave empty to disable auth) |
 | `AUTH_PASS` | – | – | Basic auth password |
+| `KOSYNC_ENABLED` | – | `false` | Enable KOReader bidirectional sync (`true`/`false`) |
+| `KOSYNC_SYNC_INTERVAL` | – | `60` | ABS → KOReader poll interval in seconds |
 
 ## API Endpoints Reference
 
@@ -173,6 +188,46 @@ Returns `{item_id}` of the currently-reading book, or `{item_id: null}`.
 
 ### `POST /api/sync-progress?library_item_id=...&time_seconds=...`
 Updates the user's listening position in Audiobookshelf via `PATCH /api/me/progress/{id}`.
+
+### KOReader Sync (kosync) Endpoints
+
+These endpoints implement the kosync protocol for bidirectional sync between KOReader on a jailbroken Kindle and Audiobookshelf. Enable with `KOSYNC_ENABLED=true`.
+
+**Protocol endpoints** (exempt from basic auth, compatible with KOReader's sync plugin):
+
+#### `POST /kosync/users/create`
+Dummy user creation. Always succeeds. KOReader requires this endpoint.
+
+#### `POST /kosync/users/auth`
+Dummy auth. Always succeeds. KOReader requires this endpoint.
+
+#### `PUT /kosync/syncs/progress`
+**Body:** `{document, percentage, progress, device, device_id}`
+KOReader pushes reading progress. If the document hash is mapped to an ABS item, automatically converts percentage to audio time and updates ABS listening position.
+
+#### `GET /kosync/syncs/progress/{document}`
+KOReader pulls reading progress. Returns the latest progress (may come from KOReader or from ABS via background sync).
+
+**Management endpoints** (behind basic auth):
+
+#### `GET /api/kosync/status`
+Overview: enabled state, mapping count, per-mapping sync status.
+
+#### `GET /api/kosync/mappings`
+List all document-hash → ABS-item mappings.
+
+#### `POST /api/kosync/mappings`
+**Body:** `{document, item_id, filename?}`
+Create or update a mapping manually.
+
+#### `DELETE /api/kosync/mappings/{document}`
+Delete a mapping.
+
+#### `GET /api/kosync/unmapped`
+List documents that have KOReader progress but no ABS item mapping.
+
+#### `POST /api/kosync/compute-hash/{item_id}`
+Download EPUB for a book, compute its partial MD5 (matching KOReader's document hash), and auto-create the mapping. Useful for pre-populating mappings.
 
 ## Core Algorithms
 
@@ -274,7 +329,7 @@ Reverse of above: interpolate char position to time via anchors, or fallback to 
 
 4. **Calibration assumes linear reading speed:** The audio narration speed is assumed constant. Variable-speed narration or books with many illustrations will reduce accuracy.
 
-5. **Sync is one-way:** Can push audio position to ABS, but doesn't read/push Kindle position (Kindle doesn't have an open API).
+5. **Kindle sync requires jailbreak:** Bidirectional sync with Kindle is available via KOReader on jailbroken Kindles (kosync protocol). Stock Kindle firmware has no open API.
 
 ## Roadmap / Open Tasks
 
