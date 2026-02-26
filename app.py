@@ -448,31 +448,51 @@ def _client() -> httpx.AsyncClient:
     return _http_client
 
 
+def _find_epub_file(item):
+    """Find EPUB from ebookFile or supplementary libraryFiles."""
+    media = item.get("media", {})
+    ef = media.get("ebookFile")
+    if ef and ef.get("metadata", {}).get("ext", "") == ".epub":
+        return ef
+    for f in item.get("libraryFiles", []):
+        if f.get("metadata", {}).get("ext", "") == ".epub":
+            return f
+    return None
+
+
 async def get_library_items():
     c = _client()
     r = await c.get(f"{ABS_URL}/api/libraries", headers=abs_headers())
     r.raise_for_status()
     libs = r.json().get("libraries", [])
-    items = []
-    cal_data = load_calibrations()
+    item_ids = []
     for lib in libs:
         r2 = await c.get(f"{ABS_URL}/api/libraries/{lib['id']}/items", headers=abs_headers(),
                          params={"limit": 100, "sort": "media.metadata.title"})
         r2.raise_for_status()
         for item in r2.json().get("results", []):
-            media = item.get("media", {}); md = media.get("metadata", {})
-            prog = item.get("userMediaProgress") or {}
-            ef = media.get("ebookFile")
-            cal = cal_data.get(item["id"])
-            items.append({
-                "id": item["id"], "title": md.get("title", "Unknown"),
-                "author": md.get("authorName", "Unknown"),
-                "duration": media.get("duration", 0),
-                "current_time": prog.get("currentTime", 0),
-                "cover": f"/api/cover/{item['id']}",
-                "has_epub": bool(ef and ef.get("metadata", {}).get("ext", "") == ".epub"),
-                "is_calibrated": cal is not None,
-            })
+            item_ids.append(item["id"])
+    # Fetch item details concurrently to access libraryFiles for epub detection
+    detail_resps = await asyncio.gather(*(
+        c.get(f"{ABS_URL}/api/items/{iid}", headers=abs_headers()) for iid in item_ids
+    ))
+    items = []
+    cal_data = load_calibrations()
+    for resp in detail_resps:
+        resp.raise_for_status()
+        item = resp.json()
+        media = item.get("media", {}); md = media.get("metadata", {})
+        prog = item.get("userMediaProgress") or {}
+        cal = cal_data.get(item["id"])
+        items.append({
+            "id": item["id"], "title": md.get("title", "Unknown"),
+            "author": md.get("authorName", "Unknown"),
+            "duration": media.get("duration", 0),
+            "current_time": prog.get("currentTime", 0),
+            "cover": f"/api/cover/{item['id']}",
+            "has_epub": _find_epub_file(item) is not None,
+            "is_calibrated": cal is not None,
+        })
     return items
 
 
@@ -528,8 +548,8 @@ async def get_epub_chapters(item_id):
     audio_ch = [{"title": ch.get("title", ""), "start": ch.get("start", 0), "end": ch.get("end", 0)}
                 for ch in media.get("chapters", [])]
     duration = media.get("duration", 0)
-    ef = media.get("ebookFile")
-    if not ef or ef.get("metadata", {}).get("ext", "") != ".epub":
+    ef = _find_epub_file(item)
+    if not ef:
         raise HTTPException(status_code=400, detail="Kein EPUB gefunden.")
     # 1. LRU in-memory cache
     if item_id in _epub_cache:
@@ -540,7 +560,7 @@ async def get_epub_chapters(item_id):
         ec = _load_cached_epub_from_disk(item_id)
         if not ec:
             # 3. Download + parse
-            eb = await download_epub(item_id, ef.get("ino", ""))
+            eb = await download_epub(item_id, ef.get("ino", ef.get("metadata", {}).get("ino", "")))
             ec = extract_text_from_epub(eb)
             if not ec:
                 raise HTTPException(status_code=500, detail="EPUB-Text konnte nicht extrahiert werden")
