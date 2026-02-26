@@ -91,16 +91,17 @@ async def lifespan(app: FastAPI):
 
 
 async def _prefetch_currently_reading():
-    """Background task: pre-warm EPUB cache for the currently-reading book."""
-    try:
-        cr_id = load_currently_reading()
-        if not cr_id:
-            return
-        logger.info("Prefetching EPUB for currently-reading book %s", cr_id[:8])
-        await get_epub_chapters(cr_id)
-        logger.info("Prefetch complete for %s", cr_id[:8])
-    except Exception as e:
-        logger.warning("Prefetch failed for currently-reading book: %s", e)
+    """Background task: pre-warm EPUB cache for all currently-reading books."""
+    cr_ids = load_currently_reading()
+    if not cr_ids:
+        return
+    for cr_id in cr_ids:
+        try:
+            logger.info("Prefetching EPUB for currently-reading book %s", cr_id[:8])
+            await get_epub_chapters(cr_id)
+            logger.info("Prefetch complete for %s", cr_id[:8])
+        except Exception as e:
+            logger.warning("Prefetch failed for %s: %s", cr_id[:8], e)
 
 
 app = FastAPI(title="Audiobook Recap", version="4.1.0",
@@ -189,24 +190,43 @@ def _currently_reading_path() -> Path:
     return DATA_DIR / "currently_reading.json"
 
 
-def load_currently_reading() -> Optional[str]:
-    """Return the single currently-reading item ID, or None."""
+def load_currently_reading() -> list[str]:
+    """Return the list of currently-reading item IDs."""
     with _favorites_lock:
         p = _currently_reading_path()
         if p.exists():
             try:
                 data = json.loads(p.read_text())
-                return data.get("item_id") if isinstance(data, dict) else None
+                # Migrate from old single-item format
+                if isinstance(data, dict) and "item_id" in data and "item_ids" not in data:
+                    old_id = data.get("item_id")
+                    return [old_id] if old_id else []
+                if isinstance(data, dict):
+                    return data.get("item_ids", [])
+                return []
             except Exception:
-                return None
-        return None
+                return []
+        return []
 
 
-def save_currently_reading(item_id: Optional[str]):
+def save_currently_reading(item_ids: list[str]):
     with _favorites_lock:
         _currently_reading_path().write_text(
-            json.dumps({"item_id": item_id}, indent=2)
+            json.dumps({"item_ids": item_ids}, indent=2)
         )
+
+
+def add_currently_reading(item_id: str):
+    ids = load_currently_reading()
+    if item_id not in ids:
+        ids.append(item_id)
+        save_currently_reading(ids)
+
+
+def remove_currently_reading(item_id: str):
+    ids = load_currently_reading()
+    ids = [i for i in ids if i != item_id]
+    save_currently_reading(ids)
 
 
 # ---------------------------------------------------------------------------
@@ -581,18 +601,17 @@ def _find_epub_file(item):
 
 
 async def get_library_items():
-    """Fast book listing – lightweight metadata only.
+    """Book listing with lightweight metadata.
 
-    Returns basic info for all books without checking EPUB availability or
-    calibration status.  Detailed info (has_epub, is_calibrated) is loaded
-    lazily via ``/api/books/{id}/details`` when the user selects a book.
+    Includes has_epub (free check on listing data) and currently-reading flags.
+    Calibration status is loaded lazily via /api/books/{id}/details.
     """
     c = _client()
     r = await c.get(f"{ABS_URL}/api/libraries", headers=abs_headers())
     r.raise_for_status()
     libs = r.json().get("libraries", [])
     items: list[dict] = []
-    cr_id = load_currently_reading()
+    cr_ids = set(load_currently_reading())
     for lib in libs:
         r2 = await c.get(
             f"{ABS_URL}/api/libraries/{lib['id']}/items",
@@ -616,7 +635,8 @@ async def get_library_items():
                 "duration": media.get("duration", 0),
                 "current_time": prog.get("currentTime", 0),
                 "cover": f"/api/cover/{item['id']}",
-                "is_currently_reading": item["id"] == cr_id,
+                "has_epub": _find_epub_file(item) is not None,
+                "is_currently_reading": item["id"] in cr_ids,
             })
     return items
 
@@ -1170,21 +1190,20 @@ async def cover_proxy(item_id: str):
 
 # --- Currently Reading ---
 @app.post("/api/currently-reading/{item_id}")
-async def set_currently_reading(item_id: str):
-    save_currently_reading(item_id)
+async def set_currently_reading_route(item_id: str):
+    add_currently_reading(item_id)
     return {"is_currently_reading": True, "item_id": item_id}
 
 
-@app.delete("/api/currently-reading")
-async def clear_currently_reading():
-    save_currently_reading(None)
-    return {"is_currently_reading": False, "item_id": None}
+@app.delete("/api/currently-reading/{item_id}")
+async def remove_currently_reading_route(item_id: str):
+    remove_currently_reading(item_id)
+    return {"is_currently_reading": False, "item_id": item_id}
 
 
 @app.get("/api/currently-reading")
-async def get_currently_reading():
-    cr = load_currently_reading()
-    return {"item_id": cr}
+async def get_currently_reading_route():
+    return {"item_ids": load_currently_reading()}
 
 
 # --- Calibration ---
