@@ -167,27 +167,31 @@ def has_whisper_sync(item_id: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Favorites persistence (thread-safe)
+# Currently-reading persistence (thread-safe, single book)
 # ---------------------------------------------------------------------------
-def _favorites_path() -> Path:
+def _currently_reading_path() -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return DATA_DIR / "favorites.json"
+    return DATA_DIR / "currently_reading.json"
 
 
-def load_favorites() -> list[str]:
+def load_currently_reading() -> Optional[str]:
+    """Return the single currently-reading item ID, or None."""
     with _favorites_lock:
-        p = _favorites_path()
+        p = _currently_reading_path()
         if p.exists():
             try:
-                return json.loads(p.read_text())
+                data = json.loads(p.read_text())
+                return data.get("item_id") if isinstance(data, dict) else None
             except Exception:
-                return []
-        return []
+                return None
+        return None
 
 
-def save_favorites(data: list[str]):
+def save_currently_reading(item_id: Optional[str]):
     with _favorites_lock:
-        _favorites_path().write_text(json.dumps(data, indent=2))
+        _currently_reading_path().write_text(
+            json.dumps({"item_id": item_id}, indent=2)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -562,42 +566,49 @@ def _find_epub_file(item):
 
 
 async def get_library_items():
+    """Fast book listing – uses the library listing endpoint directly.
+
+    Avoids N+1 individual item detail fetches.  EPUB detection uses the
+    listing's ``media.ebookFile`` (primary) plus ``libraryFiles`` when the
+    listing includes them.  Progress is fetched via ``include`` param.
+    """
     c = _client()
     r = await c.get(f"{ABS_URL}/api/libraries", headers=abs_headers())
     r.raise_for_status()
     libs = r.json().get("libraries", [])
-    item_ids = []
+    items: list[dict] = []
+    cal_data = load_calibrations()
+    cr_id = load_currently_reading()
     for lib in libs:
-        r2 = await c.get(f"{ABS_URL}/api/libraries/{lib['id']}/items", headers=abs_headers(),
-                         params={"limit": 100, "sort": "media.metadata.title"})
+        r2 = await c.get(
+            f"{ABS_URL}/api/libraries/{lib['id']}/items",
+            headers=abs_headers(),
+            params={"limit": 100, "sort": "media.metadata.title",
+                    "include": "rssfeed,numEpisodesIncomplete",
+                    "expanded": 1},
+        )
         r2.raise_for_status()
         for item in r2.json().get("results", []):
-            item_ids.append(item["id"])
-    # Fetch item details concurrently to access libraryFiles for epub detection
-    detail_resps = await asyncio.gather(*(
-        c.get(f"{ABS_URL}/api/items/{iid}", headers=abs_headers(),
-              params={"expanded": 1, "include": "progress"}) for iid in item_ids
-    ))
-    items = []
-    cal_data = load_calibrations()
-    fav_data = load_favorites()
-    for resp in detail_resps:
-        resp.raise_for_status()
-        item = resp.json()
-        media = item.get("media", {}); md = media.get("metadata", {})
-        prog = item.get("userMediaProgress") or {}
-        cal = cal_data.get(item["id"])
-        items.append({
-            "id": item["id"], "title": md.get("title", "Unknown"),
-            "author": md.get("authorName") or ", ".join(
-                a.get("name", "") for a in md.get("authors", [])) or "Unknown",
-            "duration": media.get("duration", 0),
-            "current_time": prog.get("currentTime", 0),
-            "cover": f"/api/cover/{item['id']}",
-            "has_epub": _find_epub_file(item) is not None,
-            "is_calibrated": cal is not None and bool(cal.get("whisper_anchors")),
-            "is_favorite": item["id"] in fav_data,
-        })
+            media = item.get("media", {})
+            md = media.get("metadata", {})
+            prog = item.get("userMediaProgress") or {}
+            cal = cal_data.get(item["id"])
+            has_epub = _find_epub_file(item) is not None
+            items.append({
+                "id": item["id"],
+                "title": md.get("title", "Unknown"),
+                "author": (md.get("authorName")
+                           or ", ".join(a.get("name", "")
+                                        for a in md.get("authors", []))
+                           or "Unknown"),
+                "duration": media.get("duration", 0),
+                "current_time": prog.get("currentTime", 0),
+                "cover": f"/api/cover/{item['id']}",
+                "has_epub": has_epub,
+                "is_calibrated": (cal is not None
+                                  and bool(cal.get("whisper_anchors"))),
+                "is_currently_reading": item["id"] == cr_id,
+            })
     return items
 
 
@@ -1131,23 +1142,23 @@ async def cover_proxy(item_id: str):
         return Response(status_code=404)
 
 
-# --- Favorites ---
-@app.post("/api/favorites/{item_id}")
-async def add_favorite(item_id: str):
-    favs = load_favorites()
-    if item_id not in favs:
-        favs.append(item_id)
-        save_favorites(favs)
-    return {"is_favorite": True}
+# --- Currently Reading ---
+@app.post("/api/currently-reading/{item_id}")
+async def set_currently_reading(item_id: str):
+    save_currently_reading(item_id)
+    return {"is_currently_reading": True, "item_id": item_id}
 
 
-@app.delete("/api/favorites/{item_id}")
-async def remove_favorite(item_id: str):
-    favs = load_favorites()
-    if item_id in favs:
-        favs.remove(item_id)
-        save_favorites(favs)
-    return {"is_favorite": False}
+@app.delete("/api/currently-reading")
+async def clear_currently_reading():
+    save_currently_reading(None)
+    return {"is_currently_reading": False, "item_id": None}
+
+
+@app.get("/api/currently-reading")
+async def get_currently_reading():
+    cr = load_currently_reading()
+    return {"item_id": cr}
 
 
 # --- Calibration ---
