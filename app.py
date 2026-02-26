@@ -617,7 +617,7 @@ async def get_library_items():
             f"{ABS_URL}/api/libraries/{lib['id']}/items",
             headers=abs_headers(),
             params={"limit": 100, "sort": "media.metadata.title",
-                    "include": "rssfeed,numEpisodesIncomplete",
+                    "include": "rssfeed,numEpisodesIncomplete,progress",
                     "expanded": 1},
         )
         r2.raise_for_status()
@@ -644,7 +644,7 @@ async def get_library_items():
 async def get_item_details(item_id):
     c = _client()
     r = await c.get(f"{ABS_URL}/api/items/{item_id}", headers=abs_headers(),
-                    params={"expanded": 1})
+                    params={"expanded": 1, "include": "progress"})
     r.raise_for_status()
     return r.json()
 
@@ -1162,10 +1162,13 @@ async def get_book_details(item_id: str):
     has_epub = _find_epub_file(item) is not None
     cal_data = load_calibrations()
     cal = cal_data.get(item_id)
+    prog = item.get("userMediaProgress") or {}
     return {
         "item_id": item_id,
         "has_epub": has_epub,
         "is_calibrated": cal is not None and bool(cal.get("whisper_anchors")),
+        "current_time": prog.get("currentTime", 0),
+        "duration": item.get("media", {}).get("duration", 0),
     }
 
 
