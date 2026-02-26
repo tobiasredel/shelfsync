@@ -688,6 +688,7 @@ async function startWhisperSync(){
         }
         res.style.display='';
         loadWhisperStatus();
+        loadPos();
     }catch(e){
         prog.style.display='none';
         res.innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Netzwerk-Fehler</span>`;
@@ -702,6 +703,7 @@ async function deleteWhisperSync(){
     try{
         await fetch(`/api/whisper-sync/${sel.id}`,{method:'DELETE'});
         loadWhisperStatus();
+        loadPos();
     }catch(e){}
 }
 </script>
