@@ -603,10 +603,12 @@ function toggleLibrary(){
 }
 
 async function loadFullInfo(b){
-    // 1. Fetch details (has_epub, is_calibrated)
+    // 1. Fetch details (has_epub, is_calibrated, current_time, duration)
     const dr=await(await fetch('/api/books/'+encodeURIComponent(b.id)+'/details')).json();
     detailsCache[b.id]=dr;
     b.has_epub=dr.has_epub; // sync back — listing may differ from detail
+    if(dr.current_time!=null) b.current_time=dr.current_time; // sync progress from ABS item data
+    if(dr.duration) b.duration=dr.duration;
     renderCR();
     if(!dr.has_epub) return dr;
     // 2. Fetch position (page, percentage, chapter) — needs EPUB
