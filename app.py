@@ -527,7 +527,8 @@ async def get_library_items():
 
 async def get_item_details(item_id):
     c = _client()
-    r = await c.get(f"{ABS_URL}/api/items/{item_id}", headers=abs_headers())
+    r = await c.get(f"{ABS_URL}/api/items/{item_id}", headers=abs_headers(),
+                    params={"expanded": 1})
     r.raise_for_status()
     return r.json()
 
