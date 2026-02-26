@@ -524,10 +524,8 @@ document.addEventListener('DOMContentLoaded',async()=>{
         const crBooks=books.filter(b=>b.is_currently_reading&&b.has_epub);
         if(crBooks.length){
             await Promise.all(crBooks.map(b=>loadFullInfo(b).catch(()=>{})));
-        }
-        if(!crBooks.length){
-            // No CR books — auto-expand library
-            toggleLibrary();
+            // Auto-open detail sheet for the first CR book
+            pickBook(crBooks[0].id);
         }
     }catch(e){
         st('off','Offline');
