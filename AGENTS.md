@@ -197,17 +197,29 @@ The position sync system uses a **piecewise-linear interpolation** approach with
    - Proportional chapter index scaling
    - Only used when no other strategy produces ≥ 3 anchor points
 
+#### Whisper Auto-Sync (`POST /api/whisper-sync/{item_id}`):
+- **One-time per book**: Transcribes short (20s) audio segments via OpenAI Whisper API
+- Finds transcribed text in EPUB via sliding-window fuzzy matching
+- Stores results persistently in `calibration.json` as `whisper_anchors`
+- Flow: select positions → ffmpeg extract segments → Whisper transcribe → fuzzy search in EPUB → store anchors
+- Cost: ~$0.02 per book (10 samples × 20s)
+- Requires: `ffmpeg`, `OPENAI_API_KEY`
+- Anchor format: `{audio_seconds, char_position, confidence, whisper_text}`
+- Results survive server restarts (persistent in calibration.json)
+
 #### Anchor Points (`_build_anchor_points`):
 - Each matched chapter pair creates 2 anchors: (chapter_start_time, chapter_start_char) and (chapter_end_time, chapter_end_char)
+- Whisper anchors stored as direct (time, char_pos) — no page conversion needed
 - Book boundaries (0,0) and (total_dur, total_chars) always included
-- Manual anchors from multi-point calibration merged in
-- Monotonicity enforced (time and char_pos both increasing)
+- Manual + Whisper anchors merged in; monotonicity enforced
+- Priority: manual > whisper > chapter-match > WPM > legacy
 
 #### Interpolation (`_interpolate_time_to_char`, `_interpolate_char_to_time`):
 - Binary search for surrounding anchor interval (O(log n) via `bisect`)
 - Linear interpolation within each interval
 
 ### Mapping Quality Levels
+- **whisper**: Whisper auto-sync anchors present (highest automatic quality)
 - **high**: ≥ 70% of audio chapters matched by title/boundary
 - **medium**: 30–70% matched
 - **low**: < 30% matched (but still using matched anchors)

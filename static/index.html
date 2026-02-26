@@ -179,6 +179,7 @@
             <button class="cal-tab" onclick="calTab(1)">Aktuelle Seite</button>
             <button class="cal-tab" onclick="calTab(2)">Kapitel-Offset</button>
             <button class="cal-tab" onclick="calTab(3)">Ankerpunkte</button>
+            <button class="cal-tab" onclick="calTab(4)">Whisper Sync</button>
         </div>
         <div class="cal-content active" id="calC0">
             <p class="cal-hint" style="margin-bottom:.8rem">Wie viele Seiten zeigt dein Kindle insgesamt für dieses Buch? (z.B. „Seite 42 <strong>von 320</strong>")</p>
@@ -212,6 +213,29 @@
                 <button class="cal-btn" id="anchorSaveBtn" onclick="saveAnchors()">Ankerpunkte speichern</button>
             </div>
             <div class="mapping-info" id="mappingInfo" style="display:none"></div>
+        </div>
+        <div class="cal-content" id="calC4">
+            <p class="cal-hint" style="margin-bottom:.8rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. <strong>Einmalig pro Buch</strong>, Ergebnisse werden dauerhaft gespeichert. Kosten: ~$0.02.</p>
+            <div id="whisperStatus" style="margin-bottom:.8rem"></div>
+            <div class="cal-row" style="gap:.5rem;flex-wrap:wrap">
+                <select class="cal-input" id="whisperLang" style="width:auto">
+                    <option value="de">Deutsch</option>
+                    <option value="en">English</option>
+                    <option value="fr">Français</option>
+                    <option value="es">Español</option>
+                </select>
+                <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
+                <span class="cal-hint">Samples</span>
+                <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
+                <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
+            </div>
+            <div id="whisperProgress" style="display:none;margin-top:.8rem">
+                <div style="display:flex;align-items:center;gap:.5rem">
+                    <div class="spinner" style="width:16px;height:16px;border-width:2px"></div>
+                    <span id="whisperProgressText">Starte...</span>
+                </div>
+            </div>
+            <div id="whisperResult" style="display:none;margin-top:.8rem"></div>
         </div>
         <div class="cal-row" style="margin-top:.8rem">
             <button class="cal-btn danger" id="calReset" onclick="calReset()" style="display:none">Kalibrierung zurücksetzen</button>
@@ -388,7 +412,9 @@ async function loadPos(){
         $('#pPct').textContent=`${d.percentage}%`;$('#pCh').textContent=`${d.chapter_progress_pct}%`;
         $('#pChName').textContent=d.chapter_title?`📖 ${d.chapter_title}`:'';
         $('#pNear').textContent=d.nearby_text?`„${d.nearby_text}"`:'';
-        const mqBadge = d.mapping_quality==='high'
+        const mqBadge = d.mapping_quality==='whisper'
+            ?'<span class="badge badge-green">Mapping: Whisper</span>'
+            :d.mapping_quality==='high'
             ?'<span class="badge badge-green">Mapping: hoch</span>'
             :d.mapping_quality==='medium'
             ?'<span class="badge badge-amber">Mapping: mittel</span>'
@@ -421,7 +447,7 @@ async function loadCal(){
     }catch(e){$('#calPanel').classList.remove('visible');showCal('✗ '+e.message)}
 }
 
-function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i));if(i===3)loadAnchors()}
+function calTab(i){$$('.cal-tab').forEach((t,j)=>t.classList.toggle('active',j===i));$$('.cal-content').forEach((c,j)=>c.classList.toggle('active',j===i));if(i===3)loadAnchors();if(i===4)loadWhisperStatus()}
 
 async function calByTotal(){
     const v=parseInt($('#calTotal').value);if(!v||!sel)return;
@@ -592,6 +618,90 @@ async function loadAnchors(){
             info.style.display='';
             info.textContent='Kein automatisches Kapitel-Matching möglich. Manuelle Ankerpunkte verbessern die Genauigkeit erheblich.';
         }
+    }catch(e){}
+}
+
+// --- Whisper Auto-Sync ---
+async function loadWhisperStatus(){
+    if(!sel)return;
+    const st=$('#whisperStatus'),rb=$('#whisperResult'),db=$('#whisperDeleteBtn');
+    st.innerHTML='';rb.style.display='none';db.style.display='none';
+    try{
+        const r=await fetch(`/api/chapter-mapping/${sel.id}`);
+        if(!r.ok)return;
+        const d=await r.json();
+        const wa=d.whisper_anchor_points||[];
+        if(wa.length>0){
+            st.innerHTML=`<span class="badge badge-green">Whisper-Sync: ${wa.length} Ankerpunkte</span> <span class="cal-hint">(dauerhaft gespeichert)</span>`;
+            db.style.display='';
+            // Show anchor details
+            let html='<table style="width:100%;font-size:.85rem;border-collapse:collapse"><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:.2rem .5rem">Audio-Zeit</th><th style="text-align:left;padding:.2rem .5rem">Confidence</th><th style="text-align:left;padding:.2rem .5rem">Text</th></tr>';
+            wa.forEach(a=>{
+                const min=Math.floor(a.audio_seconds/60),sec=Math.round(a.audio_seconds%60);
+                const conf=a.confidence>=0.7?'badge-green':a.confidence>=0.5?'badge-amber':'';
+                html+=`<tr style="border-bottom:1px solid var(--border)"><td style="padding:.2rem .5rem">${min}:${String(sec).padStart(2,'0')}</td><td style="padding:.2rem .5rem"><span class="badge ${conf}">${(a.confidence*100).toFixed(0)}%</span></td><td style="padding:.2rem .5rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(a.whisper_text||'').replace(/"/g,'&quot;')}">${a.whisper_text||''}</td></tr>`;
+            });
+            html+='</table>';
+            rb.innerHTML=html;rb.style.display='';
+        }else{
+            st.innerHTML='<span class="cal-hint">Noch kein Whisper-Sync durchgeführt.</span>';
+        }
+    }catch(e){}
+}
+
+async function startWhisperSync(){
+    if(!sel)return;
+    const btn=$('#whisperStartBtn'),prog=$('#whisperProgress'),pt=$('#whisperProgressText'),res=$('#whisperResult');
+    btn.disabled=true;prog.style.display='';res.style.display='none';
+    pt.textContent='Segmente werden extrahiert und transkribiert...';
+    try{
+        const r=await fetch(`/api/whisper-sync/${sel.id}`,{
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+                n_samples:parseInt($('#whisperSamples').value)||10,
+                language:$('#whisperLang').value||'de',
+                force:true,
+            })
+        });
+        const d=await r.json();
+        prog.style.display='none';
+        if(!r.ok){
+            res.innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Fehler: ${d.detail||'Unbekannt'}</span>`;
+            res.style.display='';
+            return;
+        }
+        if(d.status==='exists'){
+            res.innerHTML=`<span class="badge badge-amber">${d.message}</span>`;
+        }else{
+            const color=d.matched>=d.total_samples*0.6?'badge-green':'badge-amber';
+            res.innerHTML=`<span class="badge ${color}">${d.matched}/${d.total_samples} Ankerpunkte gefunden</span>`;
+            if(d.anchors&&d.anchors.length){
+                let html='<div style="margin-top:.5rem;font-size:.85rem">';
+                d.anchors.forEach(a=>{
+                    const min=Math.floor(a.audio_seconds/60),sec=Math.round(a.audio_seconds%60);
+                    html+=`<div style="padding:.1rem 0"><strong>${min}:${String(sec).padStart(2,'0')}</strong> → Conf. ${(a.confidence*100).toFixed(0)}% — <em>${(a.whisper_text||'').substring(0,60)}...</em></div>`;
+                });
+                html+='</div>';
+                res.innerHTML+=html;
+            }
+        }
+        res.style.display='';
+        loadWhisperStatus();
+    }catch(e){
+        prog.style.display='none';
+        res.innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Netzwerk-Fehler</span>`;
+        res.style.display='';
+    }finally{
+        btn.disabled=false;
+    }
+}
+
+async function deleteWhisperSync(){
+    if(!sel||!confirm('Whisper-Ankerpunkte löschen?'))return;
+    try{
+        await fetch(`/api/whisper-sync/${sel.id}`,{method:'DELETE'});
+        loadWhisperStatus();
     }catch(e){}
 }
 </script>
