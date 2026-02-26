@@ -364,6 +364,33 @@ def _build_full_text(ec, item_id: str | None = None) -> str:
 def _total_words(ec): return sum(ch["word_count"] for ch in ec)
 
 
+def _audio_to_epub_idx(audio_idx: int, n_audio: int, n_epub: int, offset: int = 0) -> int:
+    """Map audio chapter index → EPUB chapter index, scaling proportionally."""
+    if n_epub <= 0:
+        return 0
+    if n_audio <= 1:
+        idx = offset
+    elif n_audio == n_epub:
+        idx = audio_idx + offset
+    else:
+        idx = round(audio_idx * max(n_epub - 1, 1) / max(n_audio - 1, 1)) + offset
+    return max(0, min(idx, n_epub - 1))
+
+
+def _epub_to_audio_idx(epub_idx: int, n_audio: int, n_epub: int, offset: int = 0) -> int:
+    """Reverse: map EPUB chapter index → audio chapter index."""
+    if n_audio <= 0:
+        return 0
+    adj = epub_idx - offset
+    if n_audio == n_epub:
+        idx = adj
+    elif n_epub <= 1:
+        idx = 0
+    else:
+        idx = round(adj * max(n_audio - 1, 1) / max(n_epub - 1, 1))
+    return max(0, min(idx, n_audio - 1))
+
+
 def _time_to_char_position(audio_ch, epub_ch, time_sec, total_dur, offset: int = 0):
     full_text = _build_full_text(epub_ch)
     if not audio_ch:
@@ -378,8 +405,7 @@ def _time_to_char_position(audio_ch, epub_ch, time_sec, total_dur, offset: int =
     cs, ce = cur["start"], cur.get("end", cur["start"])
     cd = ce - cs
     cp = max(0, min(1, (time_sec - cs) / max(cd, 1)))
-    # Map audio chapter ci → EPUB chapter ci + offset
-    epub_idx = ci + offset
+    epub_idx = _audio_to_epub_idx(ci, len(audio_ch), len(epub_ch), offset)
     co = 0
     for i, e in enumerate(epub_ch):
         if i < epub_idx:
@@ -398,8 +424,7 @@ def _char_position_to_time(audio_ch, epub_ch, char_pos, total_dur, offset: int =
         if cum + e["char_count"] >= char_pos:
             ti, ep = i, (char_pos - cum) / max(e["char_count"], 1); break
         cum += e["char_count"] + 1; ti, ep = i, 1.0
-    # EPUB chapter ti → audio chapter ti - offset
-    ai = min(max(0, ti - offset), len(audio_ch) - 1)
+    ai = _epub_to_audio_idx(ti, len(audio_ch), len(epub_ch), offset)
     a = audio_ch[ai]
     return a["start"] + (a.get("end", a["start"]) - a["start"]) * ep, a.get("title", "")
 
@@ -419,8 +444,7 @@ def map_time_to_text(audio_ch, epub_ch, start_sec, end_sec, offset: int = 0):
         cs, ce = a.get("start", 0), a.get("end", 0)
         if cs >= end_sec or ce <= start_sec:
             continue
-        # Apply front-matter offset: audio chapter i → EPUB chapter i + offset
-        ei = i + offset
+        ei = _audio_to_epub_idx(i, len(audio_ch), len(epub_ch), offset)
         e = epub_ch[ei] if ei < len(epub_ch) else None
         if not e:
             at = a.get("title", "").lower()
