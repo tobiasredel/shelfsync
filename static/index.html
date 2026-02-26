@@ -521,11 +521,12 @@ document.addEventListener('DOMContentLoaded',async()=>{
         renderBooks();
         st('on',`${books.length} Bücher`);
         // Fetch full info (details + position) for all currently-reading books
-        const crBooks=books.filter(b=>b.is_currently_reading&&b.has_epub);
+        const crBooks=books.filter(b=>b.is_currently_reading);
         if(crBooks.length){
             await Promise.all(crBooks.map(b=>loadFullInfo(b).catch(()=>{})));
-            // Auto-open detail sheet for the first CR book
-            pickBook(crBooks[0].id);
+            // Auto-open detail sheet for the first CR book that has EPUB
+            const firstWithEpub=crBooks.find(b=>b.has_epub);
+            if(firstWithEpub) pickBook(firstWithEpub.id);
         }
     }catch(e){
         st('off','Offline');
@@ -605,6 +606,7 @@ async function loadFullInfo(b){
     // 1. Fetch details (has_epub, is_calibrated)
     const dr=await(await fetch('/api/books/'+encodeURIComponent(b.id)+'/details')).json();
     detailsCache[b.id]=dr;
+    b.has_epub=dr.has_epub; // sync back — listing may differ from detail
     renderCR();
     if(!dr.has_epub) return dr;
     // 2. Fetch position (page, percentage, chapter) — needs EPUB
@@ -691,7 +693,10 @@ function filterBooks(){renderBooks()}
 
 async function pickBook(id){
     sel=books.find(b=>b.id===id);
-    if(!sel||!sel.has_epub)return;
+    if(!sel)return;
+    // Check EPUB from detailsCache (reliable) or fallback to listing
+    const hasEpub=detailsCache[id]?detailsCache[id].has_epub:sel.has_epub;
+    if(!hasEpub)return;
 
     // Populate sheet header
     $('#sheetCover').src=sel.cover;
