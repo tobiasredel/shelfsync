@@ -327,6 +327,7 @@ def extract_text_from_epub(epub_bytes: bytes) -> list[dict]:
 
 def _strip_html(html_bytes: bytes) -> str:
     text = html_bytes.decode("utf-8", errors="replace")
+    text = re.sub(r"<head[^>]*>.*?</head>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
