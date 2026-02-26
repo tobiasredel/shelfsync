@@ -83,9 +83,24 @@ _http_client: httpx.AsyncClient | None = None
 async def lifespan(app: FastAPI):
     global _http_client
     _http_client = httpx.AsyncClient(timeout=30)
+    # Prefetch EPUB for currently-reading book in the background
+    asyncio.create_task(_prefetch_currently_reading())
     yield
     await _http_client.aclose()
     _http_client = None
+
+
+async def _prefetch_currently_reading():
+    """Background task: pre-warm EPUB cache for the currently-reading book."""
+    try:
+        cr_id = load_currently_reading()
+        if not cr_id:
+            return
+        logger.info("Prefetching EPUB for currently-reading book %s", cr_id[:8])
+        await get_epub_chapters(cr_id)
+        logger.info("Prefetch complete for %s", cr_id[:8])
+    except Exception as e:
+        logger.warning("Prefetch failed for currently-reading book: %s", e)
 
 
 app = FastAPI(title="Audiobook Recap", version="4.1.0",
@@ -566,18 +581,17 @@ def _find_epub_file(item):
 
 
 async def get_library_items():
-    """Fast book listing – uses the library listing endpoint directly.
+    """Fast book listing – lightweight metadata only.
 
-    Avoids N+1 individual item detail fetches.  EPUB detection uses the
-    listing's ``media.ebookFile`` (primary) plus ``libraryFiles`` when the
-    listing includes them.  Progress is fetched via ``include`` param.
+    Returns basic info for all books without checking EPUB availability or
+    calibration status.  Detailed info (has_epub, is_calibrated) is loaded
+    lazily via ``/api/books/{id}/details`` when the user selects a book.
     """
     c = _client()
     r = await c.get(f"{ABS_URL}/api/libraries", headers=abs_headers())
     r.raise_for_status()
     libs = r.json().get("libraries", [])
     items: list[dict] = []
-    cal_data = load_calibrations()
     cr_id = load_currently_reading()
     for lib in libs:
         r2 = await c.get(
@@ -592,8 +606,6 @@ async def get_library_items():
             media = item.get("media", {})
             md = media.get("metadata", {})
             prog = item.get("userMediaProgress") or {}
-            cal = cal_data.get(item["id"])
-            has_epub = _find_epub_file(item) is not None
             items.append({
                 "id": item["id"],
                 "title": md.get("title", "Unknown"),
@@ -604,9 +616,6 @@ async def get_library_items():
                 "duration": media.get("duration", 0),
                 "current_time": prog.get("currentTime", 0),
                 "cover": f"/api/cover/{item['id']}",
-                "has_epub": has_epub,
-                "is_calibrated": (cal is not None
-                                  and bool(cal.get("whisper_anchors"))),
                 "is_currently_reading": item["id"] == cr_id,
             })
     return items
@@ -1122,6 +1131,23 @@ async def list_books():
         return {"books": await get_library_items()}
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+@app.get("/api/books/{item_id}/details")
+async def get_book_details(item_id: str):
+    """Lazy-loaded book details: EPUB availability + calibration status.
+
+    Called when a user selects a book, not during initial listing.
+    """
+    item = await get_item_details(item_id)
+    has_epub = _find_epub_file(item) is not None
+    cal_data = load_calibrations()
+    cal = cal_data.get(item_id)
+    return {
+        "item_id": item_id,
+        "has_epub": has_epub,
+        "is_calibrated": cal is not None and bool(cal.get("whisper_anchors")),
+    }
+
 
 @app.get("/api/books/{item_id}/chapters")
 async def get_chapters(item_id):
