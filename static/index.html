@@ -570,16 +570,16 @@ function renderCR(){
         const info=document.createElement('div');info.className='cr-info';
         const title=document.createElement('div');title.className='cr-title';title.textContent=b.title;
         const meta=document.createElement('div');meta.className='cr-meta';
-        meta.textContent=b.author+' \u00b7 '+fmt(b.current_time)+' / '+fmt(b.duration);
+        meta.textContent=b.author;
         info.appendChild(title);info.appendChild(meta);
 
-        const detail=document.createElement('div');detail.className='cr-detail';
-        let detailText=pct(b)+'% gehört';
         if(dc){
+            const detail=document.createElement('div');detail.className='cr-detail';
+            let detailText=pct(b)+'% gehört';
             if(dc.is_calibrated) detailText+=' \u00b7 Sync aktiv';
+            detail.textContent=detailText;
+            info.appendChild(detail);
         }
-        detail.textContent=detailText;
-        info.appendChild(detail);
         card.appendChild(info);
 
         const rm=document.createElement('button');rm.className='cr-remove';rm.textContent='\u00d7';
@@ -606,16 +606,27 @@ function toggleLibrary(){
 
 async function addCR(id){
     const b=books.find(x=>x.id===id);
-    if(!b||!b.has_epub)return;
+    if(!b)return;
+    // Optimistically add to CR
     b.is_currently_reading=true;
     renderCR();renderBooks();
     try{
-        await fetch('/api/currently-reading/'+encodeURIComponent(id),{method:'POST'});
-        // Fetch details
+        // Fetch details to check EPUB availability
         const dr=await(await fetch('/api/books/'+encodeURIComponent(id)+'/details')).json();
         detailsCache[id]=dr;
+        if(!dr.has_epub){
+            // No EPUB — revert and mark in cache so library shows it dimmed
+            b.is_currently_reading=false;
+            renderCR();renderBooks();
+            return;
+        }
+        await fetch('/api/currently-reading/'+encodeURIComponent(id),{method:'POST'});
         renderCR();
-    }catch(e){}
+    }catch(e){
+        // Network error — revert
+        b.is_currently_reading=false;
+        renderCR();renderBooks();
+    }
 }
 
 async function removeCR(id){
@@ -640,10 +651,12 @@ function renderBooks(){
     if(!fb.length){l.textContent='';const d=document.createElement('div');d.className='books-loading';d.textContent='Keine weiteren Bücher';l.appendChild(d);return}
     l.textContent='';
     fb.forEach(b=>{
+        const dc=detailsCache[b.id];
+        const knownNoEpub=dc&&dc.has_epub===false;
         const item=document.createElement('div');
-        item.className='book-item'+(b.has_epub?'':' no-epub')+(sel&&sel.id===b.id?' selected':'');
+        item.className='book-item'+(knownNoEpub?' no-epub':'')+(sel&&sel.id===b.id?' selected':'');
         item.dataset.id=b.id;
-        if(b.has_epub) item.onclick=()=>addCR(b.id);
+        if(!knownNoEpub) item.onclick=()=>addCR(b.id);
 
         const img=document.createElement('img');
         img.className='book-cover';img.src=b.cover;img.alt='';
@@ -654,11 +667,13 @@ function renderBooks(){
         const title=document.createElement('div');title.className='book-title';title.textContent=b.title;
         const meta=document.createElement('div');meta.className='book-meta';
         const author=document.createElement('span');author.textContent=b.author;meta.appendChild(author);
-        const epubBadge=document.createElement('span');epubBadge.className='badge '+(b.has_epub?'badge-green':'badge-red');epubBadge.textContent=b.has_epub?'\u2713 EPUB':'\u2717 EPUB';meta.appendChild(epubBadge);
+        if(dc){
+            const epubBadge=document.createElement('span');epubBadge.className='badge '+(dc.has_epub?'badge-green':'badge-red');epubBadge.textContent=dc.has_epub?'\u2713 EPUB':'\u2717 EPUB';meta.appendChild(epubBadge);
+        }
         info.appendChild(title);info.appendChild(meta);item.appendChild(info);
 
         const prog=document.createElement('div');prog.className='book-progress';
-        prog.textContent=fmt(b.current_time)+' / '+fmt(b.duration);
+        prog.textContent=b.author;
         item.appendChild(prog);
         l.appendChild(item);
     });
