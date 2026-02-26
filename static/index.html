@@ -490,7 +490,7 @@
 </div>
 
 <script>
-let sel=null,style='concise',books=[],lastTs=null;
+let sel=null,style='concise',books=[],lastTs=null,detailsCache={};
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
 
 document.addEventListener('DOMContentLoaded',async()=>{
@@ -498,12 +498,17 @@ document.addEventListener('DOMContentLoaded',async()=>{
         const r=await(await fetch('/api/books')).json();
         books=r.books||[];
         renderBooks();
-        const ec=books.filter(b=>b.has_epub).length;
         st('on',`${books.length} Bücher`);
-        // Auto-select currently reading book
+        // Auto-select currently reading book and prefetch its details
         const cr=books.find(b=>b.is_currently_reading);
         if(cr){
             showCRCard(cr);
+            // Prefetch details for currently-reading book
+            try{
+                const dr=await(await fetch('/api/books/'+encodeURIComponent(cr.id)+'/details')).json();
+                detailsCache[cr.id]=dr;
+                renderBooks();
+            }catch(e){}
             pickBook(cr.id);
         }
     }catch(e){
@@ -546,10 +551,12 @@ function renderBooks(){
     if(!fb.length){l.textContent='';const d=document.createElement('div');d.className='books-loading';d.textContent='Keine Treffer';l.appendChild(d);return}
     l.textContent='';
     fb.forEach(b=>{
+        const dc=detailsCache[b.id];
+        const noEpub=dc&&dc.has_epub===false;
         const item=document.createElement('div');
-        item.className='book-item'+(b.has_epub?'':' no-epub')+(sel&&sel.id===b.id?' selected':'');
+        item.className='book-item'+(noEpub?' no-epub':'')+(sel&&sel.id===b.id?' selected':'');
         item.dataset.id=b.id;
-        if(b.has_epub) item.onclick=()=>pickBook(b.id);
+        if(!noEpub) item.onclick=()=>pickBook(b.id);
 
         const img=document.createElement('img');
         img.className='book-cover';img.src=b.cover;img.alt='';
@@ -560,8 +567,10 @@ function renderBooks(){
         const title=document.createElement('div');title.className='book-title';title.textContent=b.title;
         const meta=document.createElement('div');meta.className='book-meta';
         const author=document.createElement('span');author.textContent=b.author;meta.appendChild(author);
-        const epubBadge=document.createElement('span');epubBadge.className='badge '+(b.has_epub?'badge-green':'badge-red');epubBadge.textContent=b.has_epub?'\u2713 EPUB':'\u2717 EPUB';meta.appendChild(epubBadge);
-        if(b.is_calibrated){const cb=document.createElement('span');cb.className='badge badge-green';cb.textContent='Sync';meta.appendChild(cb)}
+        if(dc){
+            const epubBadge=document.createElement('span');epubBadge.className='badge '+(dc.has_epub?'badge-green':'badge-red');epubBadge.textContent=dc.has_epub?'\u2713 EPUB':'\u2717 EPUB';meta.appendChild(epubBadge);
+            if(dc.is_calibrated){const cb=document.createElement('span');cb.className='badge badge-green';cb.textContent='Sync';meta.appendChild(cb)}
+        }
         info.appendChild(title);info.appendChild(meta);item.appendChild(info);
 
         const prog=document.createElement('div');prog.className='book-progress';
@@ -585,6 +594,20 @@ async function pickBook(id){
     // Update book list selection
     $$('.book-item').forEach(b=>b.classList.remove('selected'));
     $(`.book-item[data-id="${id}"]`)?.classList.add('selected');
+
+    // Fetch details (EPUB availability + calibration) lazily
+    if(!detailsCache[id]){
+        try{
+            const r=await(await fetch('/api/books/'+encodeURIComponent(id)+'/details')).json();
+            detailsCache[id]=r;
+            renderBooks();
+        }catch(e){}
+    }
+    const dc=detailsCache[id];
+    if(dc&&!dc.has_epub){
+        // No EPUB – can't open detail sheet
+        sel=null;renderBooks();return;
+    }
 
     // Populate sheet header
     $('#sheetCover').src=sel.cover;
