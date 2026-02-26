@@ -115,7 +115,7 @@ _epub_cache: OrderedDict[str, list[dict]] = OrderedDict()
 # Calibration persistence (thread-safe)
 # ---------------------------------------------------------------------------
 _calibration_lock = threading.Lock()
-_favorites_lock = threading.Lock()
+_currently_reading_lock = threading.Lock()
 
 
 def _calibration_path() -> Path:
@@ -192,7 +192,7 @@ def _currently_reading_path() -> Path:
 
 def load_currently_reading() -> list[str]:
     """Return the list of currently-reading item IDs."""
-    with _favorites_lock:
+    with _currently_reading_lock:
         p = _currently_reading_path()
         if p.exists():
             try:
@@ -210,7 +210,7 @@ def load_currently_reading() -> list[str]:
 
 
 def save_currently_reading(item_ids: list[str]):
-    with _favorites_lock:
+    with _currently_reading_lock:
         _currently_reading_path().write_text(
             json.dumps({"item_ids": item_ids}, indent=2)
         )

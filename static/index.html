@@ -131,7 +131,6 @@
         .badge-red{background:rgba(232,84,84,.1);color:var(--danger)}
         .badge-blue{background:var(--blue-dim);color:var(--blue)}
         .badge-amber{background:rgba(232,164,74,.12);color:var(--accent)}
-        .book-progress{font-size:.72rem;color:var(--accent);font-weight:500;flex-shrink:0;text-align:right;line-height:1.3}
         .book-cr-badge{font-size:.62rem;color:var(--accent);display:block}
 
         /* Bottom sheet overlay */
@@ -539,7 +538,6 @@ function st(s,t){
     $('#sTxt').textContent=t;
 }
 function fmt(s){const h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h>0?`${h}h ${m}m`:`${m}m`}
-function pct(b){return b.duration>0?Math.round(b.current_time/b.duration*100):0}
 function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML}
 
 function renderCR(){
@@ -684,9 +682,6 @@ function renderBooks(){
         }
         info.appendChild(title);info.appendChild(meta);item.appendChild(info);
 
-        const prog=document.createElement('div');prog.className='book-progress';
-        prog.textContent=b.author;
-        item.appendChild(prog);
         l.appendChild(item);
     });
 }
@@ -741,7 +736,9 @@ async function toggleCurrentlyReading(){
 async function loadPos(){
     if(!sel)return;
     try{
-        const d=await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
+        // Use cached position from loadFullInfo if available
+        const cached=detailsCache[sel.id]&&detailsCache[sel.id].position;
+        const d=cached||await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({library_item_id:sel.id,current_time_seconds:sel.current_time})})).json();
         $('#pPage').textContent=d.estimated_page+' / '+d.total_pages;
         $('#pPct').textContent=d.percentage+'%';
