@@ -164,7 +164,6 @@
         <div class="pos-row">
             <div class="pos-item"><div class="pos-value" id="pPage">–</div><div class="pos-label">Seite</div></div>
             <div class="pos-item"><div class="pos-value" id="pPct">–</div><div class="pos-label">Prozent</div></div>
-            <div class="pos-item"><div class="pos-value" id="pCh">–</div><div class="pos-label">Kapitelfortschritt</div></div>
         </div>
         <div class="pos-chapter" id="pChName"></div>
         <div class="pos-nearby" id="pNear"></div>
@@ -180,7 +179,7 @@
             <button class="cal-tab" onclick="calTab(2)">Kapitel-Offset</button>
         </div>
         <div class="cal-content active" id="calC0">
-            <p class="cal-hint" style="margin-bottom:.8rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. <strong>Einmalig pro Buch</strong>, Ergebnisse werden dauerhaft gespeichert. Kosten: ~$0.02.</p>
+            <p class="cal-hint" style="margin-bottom:.8rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Ergebnisse werden dauerhaft gespeichert. Kosten: ~$0.02.</p>
             <div id="whisperStatus" style="margin-bottom:.8rem"></div>
             <div class="cal-row" style="gap:.5rem;flex-wrap:wrap">
                 <select class="cal-input" id="whisperLang" style="width:auto">
@@ -200,7 +199,10 @@
                     <span id="whisperProgressText">Starte...</span>
                 </div>
             </div>
-            <div id="whisperResult" style="display:none;margin-top:.8rem"></div>
+            <details id="whisperDetails" style="display:none;margin-top:.8rem">
+                <summary style="cursor:pointer;font-size:.82rem;color:var(--text-muted)">Ankerpunkte anzeigen</summary>
+                <div id="whisperResult" style="margin-top:.5rem"></div>
+            </details>
         </div>
         <div class="cal-content" id="calC1">
             <p class="cal-hint" style="margin-bottom:.8rem">Wie viele Seiten zeigt dein Reader insgesamt? (z.B. „Seite 42 <strong>von 320</strong>")</p>
@@ -208,6 +210,12 @@
                 <input type="number" class="cal-input" id="calTotal" placeholder="320" min="1">
                 <span class="cal-hint">Seiten gesamt</span>
                 <button class="cal-btn" id="calTotalBtn" onclick="calByTotal()">Kalibrieren</button>
+            </div>
+            <p class="cal-hint" style="margin-top:1rem;margin-bottom:.5rem">Oder direkt Wörter pro Seite setzen:</p>
+            <div class="cal-row">
+                <input type="number" class="cal-input" id="calWpp" placeholder="250" min="50" max="500" style="width:80px">
+                <span class="cal-hint">Wörter/Seite</span>
+                <button class="cal-btn" id="calWppBtn" onclick="calByWpp()">Setzen</button>
             </div>
         </div>
         <div class="cal-content" id="calC2">
@@ -390,7 +398,7 @@ async function loadPos(){
         const d=await(await fetch('/api/position',{method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify({library_item_id:sel.id,current_time_seconds:sel.current_time})})).json();
         $('#pPage').textContent=`${d.estimated_page} / ${d.total_pages}`;
-        $('#pPct').textContent=`${d.percentage}%`;$('#pCh').textContent=`${d.chapter_progress_pct}%`;
+        $('#pPct').textContent=`${d.percentage}%`;
         $('#pChName').textContent=d.chapter_title?`📖 ${d.chapter_title}`:'';
         $('#pNear').textContent=d.nearby_text?`„${d.nearby_text}"`:'';
         const mqBadge = d.mapping_quality==='whisper'
@@ -416,6 +424,8 @@ async function loadCal(){
         $('#calReset').style.display=d.is_calibrated?'':'none';
         $('#calOffset').value=d.epub_chapter_offset||0;
         $('#calOffsetMax').textContent=d.epub_chapter_count||'?';
+        $('#calWpp').value=d.words_per_page||'';
+        $('#calWpp').placeholder=d.default_words_per_page||250;
         $('#calPanel').classList.add('visible');
         loadWhisperStatus();
     }catch(e){$('#calPanel').classList.remove('visible');showCal('✗ '+e.message)}
@@ -435,6 +445,20 @@ async function calByTotal(){
         loadPos();$('#calReset').style.display='';
     }catch(e){showCal('✗ Fehler: '+e.message)}
     finally{btn.disabled=false;btn.textContent='Kalibrieren'}
+}
+
+async function calByWpp(){
+    const v=parseFloat($('#calWpp').value);if(!v||!sel)return;
+    const btn=$('#calWppBtn');btn.disabled=true;btn.textContent='…';
+    try{
+        const r=await fetch('/api/calibrate/by-wpp',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({library_item_id:sel.id,words_per_page:v})});
+        if(!r.ok){const e=await r.json().catch(()=>({detail:'Fehler'}));throw new Error(e.detail)}
+        const d=await r.json();
+        showCal(`✓ Kalibriert: ${d.words_per_page} Wörter/Seite → ${d.total_pages} Seiten`);
+        loadPos();$('#calReset').style.display='';
+    }catch(e){showCal('✗ Fehler: '+e.message)}
+    finally{btn.disabled=false;btn.textContent='Setzen'}
 }
 
 async function calByPage(){
@@ -598,8 +622,9 @@ async function loadAnchors(){
 // --- Whisper Auto-Sync ---
 async function loadWhisperStatus(){
     if(!sel)return;
-    const st=$('#whisperStatus'),rb=$('#whisperResult'),db=$('#whisperDeleteBtn');
-    st.innerHTML='';rb.style.display='none';db.style.display='none';
+    const st=$('#whisperStatus'),rb=$('#whisperResult'),db=$('#whisperDeleteBtn'),det=$('#whisperDetails');
+    const btn=$('#whisperStartBtn');
+    st.innerHTML='';det.style.display='none';db.style.display='none';
     try{
         const r=await fetch(`/api/chapter-mapping/${sel.id}`);
         if(!r.ok)return;
@@ -608,7 +633,8 @@ async function loadWhisperStatus(){
         if(wa.length>0){
             st.innerHTML=`<span class="badge badge-green">Whisper-Sync: ${wa.length} Ankerpunkte</span> <span class="cal-hint">(dauerhaft gespeichert)</span>`;
             db.style.display='';
-            // Show anchor details
+            btn.textContent='Neu starten';
+            // Show anchor details in collapsible
             let html='<table style="width:100%;font-size:.85rem;border-collapse:collapse"><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:.2rem .5rem">Audio-Zeit</th><th style="text-align:left;padding:.2rem .5rem">Confidence</th><th style="text-align:left;padding:.2rem .5rem">Text</th></tr>';
             wa.forEach(a=>{
                 const min=Math.floor(a.audio_seconds/60),sec=Math.round(a.audio_seconds%60);
@@ -616,17 +642,18 @@ async function loadWhisperStatus(){
                 html+=`<tr style="border-bottom:1px solid var(--border)"><td style="padding:.2rem .5rem">${min}:${String(sec).padStart(2,'0')}</td><td style="padding:.2rem .5rem"><span class="badge ${conf}">${(a.confidence*100).toFixed(0)}%</span></td><td style="padding:.2rem .5rem;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(a.whisper_text||'').replace(/"/g,'&quot;')}">${a.whisper_text||''}</td></tr>`;
             });
             html+='</table>';
-            rb.innerHTML=html;rb.style.display='';
+            rb.innerHTML=html;det.style.display='';
         }else{
             st.innerHTML='<span class="cal-hint">Noch kein Whisper-Sync durchgeführt.</span>';
+            btn.textContent='Auto-Sync starten';
         }
     }catch(e){}
 }
 
 async function startWhisperSync(){
     if(!sel)return;
-    const btn=$('#whisperStartBtn'),prog=$('#whisperProgress'),pt=$('#whisperProgressText'),res=$('#whisperResult');
-    btn.disabled=true;prog.style.display='';res.style.display='none';
+    const btn=$('#whisperStartBtn'),prog=$('#whisperProgress'),pt=$('#whisperProgressText'),det=$('#whisperDetails');
+    btn.disabled=true;prog.style.display='';det.style.display='none';
     pt.textContent='Segmente werden extrahiert und transkribiert...';
     try{
         const r=await fetch(`/api/whisper-sync/${sel.id}`,{
@@ -641,32 +668,15 @@ async function startWhisperSync(){
         const d=await r.json();
         prog.style.display='none';
         if(!r.ok){
-            res.innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Fehler: ${d.detail||'Unbekannt'}</span>`;
-            res.style.display='';
+            $('#whisperStatus').innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Fehler: ${d.detail||'Unbekannt'}</span>`;
             return;
         }
-        if(d.status==='exists'){
-            res.innerHTML=`<span class="badge badge-amber">${d.message}</span>`;
-        }else{
-            const color=d.matched>=d.total_samples*0.6?'badge-green':'badge-amber';
-            res.innerHTML=`<span class="badge ${color}">${d.matched}/${d.total_samples} Ankerpunkte gefunden</span>`;
-            if(d.anchors&&d.anchors.length){
-                let html='<div style="margin-top:.5rem;font-size:.85rem">';
-                d.anchors.forEach(a=>{
-                    const min=Math.floor(a.audio_seconds/60),sec=Math.round(a.audio_seconds%60);
-                    html+=`<div style="padding:.1rem 0"><strong>${min}:${String(sec).padStart(2,'0')}</strong> → Conf. ${(a.confidence*100).toFixed(0)}% — <em>${(a.whisper_text||'').substring(0,60)}...</em></div>`;
-                });
-                html+='</div>';
-                res.innerHTML+=html;
-            }
-        }
-        res.style.display='';
+        // Reload status (shows anchors in collapsible) and position
         loadWhisperStatus();
         loadPos();
     }catch(e){
         prog.style.display='none';
-        res.innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Netzwerk-Fehler</span>`;
-        res.style.display='';
+        $('#whisperStatus').innerHTML=`<span class="badge" style="background:#c0392b;color:#fff">Netzwerk-Fehler</span>`;
     }finally{
         btn.disabled=false;
     }
