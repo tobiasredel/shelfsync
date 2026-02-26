@@ -959,13 +959,21 @@ def _get_anchors(
     # Sort by time, deduplicate (keep last for same time)
     anchors.sort(key=lambda x: (x[0], x[1]))
     cleaned: list[tuple[float, int]] = [anchors[0]]
+    dropped = 0
     for t, c in anchors[1:]:
         if t > cleaned[-1][0] + 0.5:
             if c >= cleaned[-1][1]:
                 cleaned.append((t, c))
+            else:
+                dropped += 1
+                logger.warning("Whisper-Anker bei %.0fs verworfen: char_pos %d < vorheriger %d",
+                               t, c, cleaned[-1][1])
         else:
             if c > cleaned[-1][1]:
                 cleaned[-1] = (t, c)
+    if dropped:
+        logger.warning("Whisper-Sync: %d von %d Ankern wegen Monotonie verworfen",
+                       dropped, len(anchors) - 2)
 
     return cleaned, mapping
 
@@ -1475,9 +1483,12 @@ def _find_text_in_epub(
     step = max(1, n // 6)  # Slide by ~1/6 of needle length for speed
 
     # Track character positions: we need to map word index → char offset
-    # Pre-compute word start positions in the region
+    # IMPORTANT: use the same normalization as _normalize_for_matching so that
+    # word indices align. The regex replaces each punctuation char with a single
+    # space, preserving character offsets in the original region.
+    normalized_region = re.sub(r'[^\w\s\-äöüàáâèéêìíîòóôùúûß]', ' ', region.lower())
     word_char_starts: list[int] = []
-    for m in re.finditer(r'\S+', region.lower()):
+    for m in re.finditer(r'\S+', normalized_region):
         word_char_starts.append(m.start())
 
     for i in range(0, len(haystack_words) - n + 1, step):
