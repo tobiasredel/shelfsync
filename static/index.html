@@ -889,6 +889,23 @@ async function doFind(){
     }catch(e){se('fErr',e.message)}finally{$('#fLoad').classList.remove('visible');$('#fBtn').disabled=false}
 }
 
+function resizeImg(file,maxPx){
+    return new Promise((res,rej)=>{
+        const img=new Image();
+        img.onload=()=>{
+            let w=img.width,h=img.height;
+            if(w>maxPx||h>maxPx){
+                const s=maxPx/Math.max(w,h);w=Math.round(w*s);h=Math.round(h*s);
+            }
+            const c=document.createElement('canvas');c.width=w;c.height=h;
+            c.getContext('2d').drawImage(img,0,0,w,h);
+            res(c.toDataURL('image/jpeg',0.85));
+        };
+        img.onerror=()=>rej(new Error('Bild konnte nicht geladen werden'));
+        img.src=URL.createObjectURL(file);
+    });
+}
+
 async function doOCR(input){
     const file=input.files&&input.files[0];
     input.value='';
@@ -898,12 +915,7 @@ async function doOCR(input){
     st.innerHTML='<div class="ocr-spinner"></div>Text wird erkannt…';
     $('#ocrBtn').disabled=true;
     try{
-        const b64=await new Promise((res,rej)=>{
-            const r=new FileReader();
-            r.onload=()=>res(r.result);
-            r.onerror=()=>rej(new Error('Datei konnte nicht gelesen werden'));
-            r.readAsDataURL(file);
-        });
+        const b64=await resizeImg(file,2048);
         const r=await fetch('/api/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_base64:b64})});
         if(!r.ok){const e=await r.json().catch(()=>({detail:'OCR fehlgeschlagen'}));throw new Error(e.detail)}
         const d=await r.json();
