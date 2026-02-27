@@ -263,6 +263,26 @@
             font-size:16px;outline:none;transition:border-color .2s;resize:vertical;min-height:60px;
         }
         .fi:focus{border-color:var(--blue)}
+        .ocr-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem}
+        .ocr-btn{
+            display:flex;align-items:center;gap:.35rem;
+            padding:.35rem .7rem;background:var(--bg);border:1px solid var(--border);
+            border-radius:20px;color:var(--text-muted);font-family:inherit;
+            font-size:.75rem;cursor:pointer;transition:all .15s;min-height:36px;
+        }
+        .ocr-btn:active{border-color:var(--blue);color:var(--blue)}
+        .ocr-btn:disabled{opacity:.4;cursor:not-allowed}
+        .ocr-btn svg{flex-shrink:0}
+        .ocr-status{
+            display:none;padding:.5rem .7rem;margin-bottom:.5rem;
+            background:var(--blue-dim);border-radius:var(--radius-sm);
+            font-size:.78rem;color:var(--blue);
+            align-items:center;gap:.5rem;
+        }
+        .ocr-status.visible{display:flex}
+        .ocr-status.error{background:rgba(232,84,84,.08);color:var(--danger)}
+        .ocr-spinner{width:14px;height:14px;border:2px solid var(--blue);border-top-color:transparent;border-radius:50%;animation:spin .6s linear infinite;flex-shrink:0}
+        @keyframes spin{to{transform:rotate(360deg)}}
         .fo{text-align:center;color:var(--text-muted);font-size:.8rem;margin:.6rem 0}
         .pi-row{display:flex;align-items:center;gap:.5rem}
         .pi{
@@ -348,6 +368,7 @@
             .sb:hover{background:#6ee7a0;transform:translateY(-1px)}
             .qb:hover{border-color:var(--accent);color:var(--accent)}
             .so:hover{border-color:var(--accent);color:var(--text)}
+            .ocr-btn:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
             .sheet{max-height:85vh}
         }
     </style>
@@ -496,7 +517,15 @@
         <!-- TAB: Find -->
         <div class="tc" id="t-find">
             <div class="card">
-                <div class="sl" style="margin-bottom:.5rem">Textstelle eingeben</div>
+                <div class="ocr-header">
+                    <div class="sl" style="margin-bottom:0">Textstelle eingeben</div>
+                    <button class="ocr-btn" id="ocrBtn" onclick="$('#ocrInput').click()" title="Foto von Buchseite aufnehmen">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                        <span>Foto</span>
+                    </button>
+                    <input type="file" id="ocrInput" accept="image/*" capture="environment" style="display:none" onchange="doOCR(this)">
+                </div>
+                <div class="ocr-status" id="ocrStatus"></div>
                 <textarea class="fi" id="fTxt" placeholder="Einen Satz aus dem Kindle eingeben…"></textarea>
                 <div class="fo">— oder —</div>
                 <div class="sl" style="margin-bottom:.3rem">Seitenzahl eingeben</div>
@@ -858,6 +887,34 @@ async function doFind(){
             $('#fTs').textContent=d.audio_timestamp_formatted;$('#fMeta').textContent=d.chapter_title+' \u00b7 Seite '+p;$('#fCtx').textContent=d.nearby_text?'\u201E'+d.nearby_text+'\u201C':''}
         lastTs=d.audio_timestamp_seconds;$('#sStat').classList.remove('visible');$('#fRes').classList.add('visible');
     }catch(e){se('fErr',e.message)}finally{$('#fLoad').classList.remove('visible');$('#fBtn').disabled=false}
+}
+
+async function doOCR(input){
+    const file=input.files&&input.files[0];
+    input.value='';
+    if(!file)return;
+    const st=$('#ocrStatus');
+    st.className='ocr-status visible';
+    st.innerHTML='<div class="ocr-spinner"></div>Text wird erkannt…';
+    $('#ocrBtn').disabled=true;
+    try{
+        const b64=await new Promise((res,rej)=>{
+            const r=new FileReader();
+            r.onload=()=>res(r.result);
+            r.onerror=()=>rej(new Error('Datei konnte nicht gelesen werden'));
+            r.readAsDataURL(file);
+        });
+        const r=await fetch('/api/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image_base64:b64})});
+        if(!r.ok){const e=await r.json().catch(()=>({detail:'OCR fehlgeschlagen'}));throw new Error(e.detail)}
+        const d=await r.json();
+        $('#fTxt').value=d.text;
+        $('#fTxt').focus();
+        st.className='ocr-status';
+    }catch(e){
+        st.className='ocr-status visible error';
+        st.textContent=e.message;
+        setTimeout(()=>{st.className='ocr-status'},4000);
+    }finally{$('#ocrBtn').disabled=false}
 }
 
 function hl(ctx,q){if(!q)return esc(ctx);const i=ctx.toLowerCase().indexOf(q.toLowerCase().substring(0,20));if(i===-1)return esc(ctx);return esc(ctx.slice(0,i))+'<mark>'+esc(ctx.slice(i,i+q.length))+'</mark>'+esc(ctx.slice(i+q.length))}
