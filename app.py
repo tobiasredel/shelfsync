@@ -290,6 +290,14 @@ class PageToAudioResponse(BaseModel):
     nearby_text: str
 
 
+class OCRRequest(BaseModel):
+    image_base64: str  # base64-encoded image (JPEG/PNG)
+
+
+class OCRResponse(BaseModel):
+    text: str
+
+
 class WhisperSyncRequest(BaseModel):
     n_samples: int = 10
     language: str = "de"
@@ -1558,6 +1566,60 @@ async def create_recap(req: RecapRequest):
     return RecapResponse(text_excerpt=text[:5000] + ("…" if len(text) > 5000 else ""),
                          summary=summary, chapters_covered=names,
                          duration_seconds=d, cost_estimate_usd=round(cost, 6))
+
+
+# --- OCR ---
+@app.post("/api/ocr", response_model=OCRResponse)
+async def ocr_image(req: OCRRequest):
+    if not OPENAI_API_KEY:
+        raise HTTPException(status_code=500, detail="Kein OpenAI API Key konfiguriert")
+    raw = req.image_base64
+    # Strip optional data-URI prefix
+    if "," in raw[:80]:
+        raw = raw.split(",", 1)[1]
+    # Validate base64 length (max ~10 MB image)
+    if len(raw) > 14_000_000:
+        raise HTTPException(status_code=400, detail="Bild zu groß (max 10 MB)")
+    # Detect MIME type from first bytes
+    try:
+        header = base64.b64decode(raw[:16])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ungültiges Bild")
+    if header[:3] == b'\xff\xd8\xff':
+        mime = "image/jpeg"
+    elif header[:8] == b'\x89PNG\r\n\x1a\n':
+        mime = "image/png"
+    elif header[:4] == b'RIFF' and header[8:12] == b'WEBP':
+        mime = "image/webp"
+    else:
+        mime = "image/jpeg"  # fallback
+    data_uri = f"data:{mime};base64,{raw}"
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    try:
+        r = await client.chat.completions.create(
+            model=LLM_MODEL,
+            max_tokens=500,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": (
+                        "Extrahiere den sichtbaren Text aus diesem Foto einer Buchseite. "
+                        "Gib NUR den erkannten Text zurück, ohne Erklärungen oder Formatierung. "
+                        "Falls mehrere Absätze sichtbar sind, gib nur den am besten lesbaren ab."
+                    )},
+                    {"type": "image_url", "image_url": {"url": data_uri, "detail": "high"}},
+                ],
+            }],
+        )
+        text = (r.choices[0].message.content or "").strip()
+        if not text:
+            raise HTTPException(status_code=422, detail="Kein Text erkannt")
+        return OCRResponse(text=text)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("OCR fehlgeschlagen: %s", e)
+        raise HTTPException(status_code=502, detail=f"OCR fehlgeschlagen: {e}")
 
 
 # --- Find ---
