@@ -1,8 +1,8 @@
 services:
-  audiobook-recap:
-    image: ghcr.io/tobiasredel/audiobook-recap:latest
+  shelfsync:
+    image: ghcr.io/tobiasredel/shelfsync:latest
     build: .
-    container_name: audiobook-recap
+    container_name: shelfsync
     restart: unless-stopped
     ports:
       - "8765:8765"

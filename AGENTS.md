@@ -1,15 +1,15 @@
-# AGENTS.md – Audiobook Recap
+# AGENTS.md – ShelfSync
 
 ## Project Overview
 
-**Audiobook Recap** is a self-hosted web tool that bridges audiobooks and eBooks. It connects to a user's **Audiobookshelf** instance, extracts text from EPUBs, and provides four core features:
+**ShelfSync** is a self-hosted web tool that bridges audiobooks and eBooks. It connects to a user's **Audiobookshelf** instance, extracts text from EPUBs, and provides four core features:
 
-1. **Recap** – Summarize a missed audiobook segment (e.g. "what happened between minute 45 and 55?") using EPUB text + GPT-4o-mini
-2. **Position Sync** – Show which Kindle page / percentage corresponds to the current audio position
-3. **Find & Jump** – Enter a Kindle page number or text passage → get the audio timestamp → optionally update the ABS listening position
+1. **Position Sync** (Primary) – Show which Kindle page / percentage corresponds to the current audio position, like a self-hosted WhisperSync
+2. **Find & Jump** – Enter a Kindle page number or text passage → get the audio timestamp → optionally update the ABS listening position
+3. **Recap** – Summarize a missed audiobook segment (e.g. "what happened between minute 45 and 55?") using EPUB text + GPT-4o-mini
 4. **Currently Reading** – Mark one book as "currently reading"; it appears as a hero card at the top and is auto-selected on page load
 
-The key insight is that EPUB text extraction replaces expensive Speech-to-Text (Whisper), making the tool ~14x cheaper (~$0.005 vs $0.07 per recap).
+The key insight is that EPUB text extraction enables accurate position mapping and cheap GPT summaries (~$0.005 vs $0.07 per recap with Whisper).
 
 ## Architecture
 
@@ -58,7 +58,7 @@ The key insight is that EPUB text extraction replaces expensive Speech-to-Text (
 ## File Structure
 
 ```
-audiobook-recap/
+shelfsync/
 ├── app.py                 # FastAPI application (all backend logic)
 ├── static/
 │   └── index.html         # Single-file frontend (HTML + CSS + JS)
@@ -304,7 +304,7 @@ Reverse of above: interpolate char position to time via anchors, or fallback to 
 
 ```bash
 # Clone / copy project
-cd audiobook-recap
+cd shelfsync
 
 # Create venv
 python -m venv .venv
