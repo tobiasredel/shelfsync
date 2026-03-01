@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Recap">
+    <meta name="apple-mobile-web-app-title" content="ShelfSync">
     <meta name="theme-color" content="#0f1117">
     <meta name="mobile-web-app-capable" content="yes">
-    <title>Audiobook Recap</title>
+    <title>ShelfSync</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Serif+Display&display=swap" rel="stylesheet">
     <style>
@@ -377,8 +377,8 @@
 <div class="app">
     <!-- Header -->
     <div class="header">
-        <div class="header-icon">🎧</div>
-        <h1>Audiobook Recap</h1>
+        <div class="header-icon">🔗</div>
+        <h1>ShelfSync</h1>
         <div class="status-pill"><div class="status-dot checking" id="sDot"></div><span id="sTxt">Verbinde…</span></div>
     </div>
 
@@ -422,71 +422,74 @@
         </button>
     </div>
     <div class="sheet-body">
-        <!-- Position -->
-        <div class="pos-box" id="posBox">
-            <div class="sl" style="margin-bottom:.6rem">Aktuelle Position</div>
-            <div class="pos-row">
-                <div class="pos-item"><div class="pos-value" id="pPage">–</div><div class="pos-label">Seite</div></div>
-                <div class="pos-item"><div class="pos-value" id="pPct">–</div><div class="pos-label">Prozent</div></div>
-            </div>
-            <div class="pos-chapter" id="pChName"></div>
-            <div class="pos-nearby" id="pNear"></div>
-            <div class="pos-cal-status" id="pCalStatus"></div>
-            <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border)">
-                <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem">
-                    <span style="font-size:.75rem;color:var(--text-muted)">Kindle-Seiten gesamt:</span>
-                    <input type="number" id="pKindlePages" min="1" placeholder="z.B. 375" style="width:80px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
-                    <button onclick="saveKindlePages()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Setzen</button>
-                    <span id="pKindleOk" style="font-size:.72rem;color:var(--green);display:none">Gespeichert</span>
-                </div>
-                <div id="pKindleCalibrateRow" style="display:none;align-items:center;gap:.5rem;flex-wrap:wrap">
-                    <span style="font-size:.75rem;color:var(--text-muted)">Aktuelle Kindle-Seite:</span>
-                    <input type="number" id="pKindleCurPage" min="1" placeholder="Seite jetzt" style="width:90px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
-                    <button onclick="calibrateKindle()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Abgleichen</button>
-                    <span id="pCalOk" style="font-size:.72rem;color:var(--green);display:none"></span>
-                </div>
-                <div id="pCalInfo" style="display:none;margin-top:.3rem;font-size:.7rem;color:var(--text-muted)"></div>
-            </div>
-        </div>
-
-        <!-- Whisper-Sync -->
-        <div class="cal-panel" id="calPanel">
-            <div class="sl" style="margin-bottom:.6rem">Whisper-Sync</div>
-            <p class="cal-hint" style="margin-bottom:.6rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Kosten: ~$0.02.</p>
-            <div id="whisperStatus" style="margin-bottom:.6rem"></div>
-            <div class="cal-row" style="gap:.4rem;flex-wrap:wrap">
-                <select class="cal-input" id="whisperLang" style="width:auto">
-                    <option value="de">Deutsch</option>
-                    <option value="en">English</option>
-                    <option value="fr">Français</option>
-                    <option value="es">Español</option>
-                </select>
-                <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
-                <span class="cal-hint">Samples</span>
-                <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
-                <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
-            </div>
-            <div id="whisperProgress" style="display:none;margin-top:.6rem">
-                <div style="display:flex;align-items:center;gap:.5rem">
-                    <div class="status-dot checking"></div>
-                    <span id="whisperProgressText" style="font-size:.82rem;color:var(--text-muted)">Starte...</span>
-                </div>
-            </div>
-            <details id="whisperDetails" style="display:none;margin-top:.6rem">
-                <summary style="cursor:pointer;font-size:.8rem;color:var(--text-muted);min-height:44px;display:flex;align-items:center">Ankerpunkte anzeigen</summary>
-                <div id="whisperResult" style="margin-top:.4rem"></div>
-            </details>
-            <div class="cal-result" id="calRes"></div>
-        </div>
-
         <!-- Tabs -->
         <div class="tabs">
-            <button class="tab active" onclick="sTab('recap')">📝 Recap</button>
+            <button class="tab active" onclick="sTab('position')">📍 Position</button>
             <button class="tab" onclick="sTab('find')">🔍 Finden</button>
+            <button class="tab" onclick="sTab('recap')">📝 Recap</button>
+        </div>
+
+        <!-- TAB: Position -->
+        <div class="tc active" id="t-position">
+            <div class="pos-box" id="posBox">
+                <div class="sl" style="margin-bottom:.6rem">Aktuelle Position</div>
+                <div class="pos-row">
+                    <div class="pos-item"><div class="pos-value" id="pPage">–</div><div class="pos-label">Seite</div></div>
+                    <div class="pos-item"><div class="pos-value" id="pPct">–</div><div class="pos-label">Prozent</div></div>
+                </div>
+                <div class="pos-chapter" id="pChName"></div>
+                <div class="pos-nearby" id="pNear"></div>
+                <div class="pos-cal-status" id="pCalStatus"></div>
+                <div style="margin-top:.6rem;padding-top:.6rem;border-top:1px solid var(--border)">
+                    <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-bottom:.4rem">
+                        <span style="font-size:.75rem;color:var(--text-muted)">Kindle-Seiten gesamt:</span>
+                        <input type="number" id="pKindlePages" min="1" placeholder="z.B. 375" style="width:80px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
+                        <button onclick="saveKindlePages()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Setzen</button>
+                        <span id="pKindleOk" style="font-size:.72rem;color:var(--green);display:none">Gespeichert</span>
+                    </div>
+                    <div id="pKindleCalibrateRow" style="display:none;align-items:center;gap:.5rem;flex-wrap:wrap">
+                        <span style="font-size:.75rem;color:var(--text-muted)">Aktuelle Kindle-Seite:</span>
+                        <input type="number" id="pKindleCurPage" min="1" placeholder="Seite jetzt" style="width:90px;padding:.35rem .5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:inherit;font-size:.82rem;text-align:center;outline:none">
+                        <button onclick="calibrateKindle()" style="padding:.35rem .7rem;background:var(--accent);color:var(--bg);border:none;border-radius:var(--radius-sm);font-family:inherit;font-size:.75rem;cursor:pointer;font-weight:500">Abgleichen</button>
+                        <span id="pCalOk" style="font-size:.72rem;color:var(--green);display:none"></span>
+                    </div>
+                    <div id="pCalInfo" style="display:none;margin-top:.3rem;font-size:.7rem;color:var(--text-muted)"></div>
+                </div>
+            </div>
+
+            <!-- Whisper-Sync -->
+            <div class="cal-panel" id="calPanel">
+                <div class="sl" style="margin-bottom:.6rem">Whisper-Sync</div>
+                <p class="cal-hint" style="margin-bottom:.6rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Kosten: ~$0.02.</p>
+                <div id="whisperStatus" style="margin-bottom:.6rem"></div>
+                <div class="cal-row" style="gap:.4rem;flex-wrap:wrap">
+                    <select class="cal-input" id="whisperLang" style="width:auto">
+                        <option value="de">Deutsch</option>
+                        <option value="en">English</option>
+                        <option value="fr">Français</option>
+                        <option value="es">Español</option>
+                    </select>
+                    <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
+                    <span class="cal-hint">Samples</span>
+                    <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
+                    <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
+                </div>
+                <div id="whisperProgress" style="display:none;margin-top:.6rem">
+                    <div style="display:flex;align-items:center;gap:.5rem">
+                        <div class="status-dot checking"></div>
+                        <span id="whisperProgressText" style="font-size:.82rem;color:var(--text-muted)">Starte...</span>
+                    </div>
+                </div>
+                <details id="whisperDetails" style="display:none;margin-top:.6rem">
+                    <summary style="cursor:pointer;font-size:.8rem;color:var(--text-muted);min-height:44px;display:flex;align-items:center">Ankerpunkte anzeigen</summary>
+                    <div id="whisperResult" style="margin-top:.4rem"></div>
+                </details>
+                <div class="cal-result" id="calRes"></div>
+            </div>
         </div>
 
         <!-- TAB: Recap -->
-        <div class="tc active" id="t-recap">
+        <div class="tc" id="t-recap">
             <div class="card">
                 <div class="sl" style="margin-bottom:.6rem">Zeitraum</div>
                 <div class="time-row">
@@ -851,7 +854,7 @@ async function loadCal(){
     loadWhisperStatus();
 }
 
-function sTab(n){$$('.tab').forEach((t,i)=>t.classList.toggle('active',['recap','find'][i]===n));$$('.tc').forEach(c=>c.classList.remove('active'));$('#t-'+n).classList.add('active')}
+function sTab(n){$$('.tab').forEach((t,i)=>t.classList.toggle('active',['position','find','recap'][i]===n));$$('.tc').forEach(c=>c.classList.remove('active'));$('#t-'+n).classList.add('active')}
 function qr(m){if(!sel)return;const c=sel.current_time/60,s=Math.max(0,c-m);$('#sH').value=Math.floor(s/60);$('#sM').value=Math.floor(s%60);$('#eH').value=Math.floor(c/60);$('#eM').value=Math.floor(c%60)}
 function ss(el){$$('.so').forEach(s=>s.classList.remove('selected'));el.classList.add('selected');style=el.dataset.s}
 function gm(p){return(parseInt($('#'+p+'H').value)||0)*60+(parseInt($('#'+p+'M').value)||0)}

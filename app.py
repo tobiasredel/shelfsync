@@ -1,5 +1,5 @@
 """
-Audiobook Recap v4 – Recap + Position Sync + Dynamic Calibration
+ShelfSync v5 – Position Sync + Find & Jump + Recap
 """
 
 import asyncio
@@ -46,7 +46,7 @@ AUTH_USER = os.getenv("AUTH_USER", "")
 AUTH_PASS = os.getenv("AUTH_PASS", "")
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("audiobook-recap")
+logger = logging.getLogger("shelfsync")
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ async def verify_auth(request: Request):
             pass
     raise HTTPException(
         status_code=401, detail="Unauthorized",
-        headers={"WWW-Authenticate": 'Basic realm="Audiobook Recap"'})
+        headers={"WWW-Authenticate": 'Basic realm="ShelfSync"'})
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ async def _prefetch_currently_reading():
             logger.warning("Prefetch failed for %s: %s", cr_id[:8], e)
 
 
-app = FastAPI(title="Audiobook Recap", version="4.1.0",
+app = FastAPI(title="ShelfSync", version="5.0.0",
               lifespan=lifespan, dependencies=[Depends(verify_auth)])
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -1151,7 +1151,7 @@ async def index():
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "4.1.0"}
+    return {"status": "ok", "version": "5.0.0"}
 
 @app.get("/api/books")
 async def list_books():
