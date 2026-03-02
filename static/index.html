@@ -143,7 +143,7 @@
         .sheet{
             position:fixed;left:0;right:0;bottom:0;z-index:11;
             background:var(--bg);border-top-left-radius:20px;border-top-right-radius:20px;
-            max-height:92vh;display:flex;flex-direction:column;
+            max-height:85vh;display:flex;flex-direction:column;
             transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);
             padding-bottom:var(--safe-bottom);
             max-width:720px;margin:0 auto;
@@ -371,7 +371,13 @@
             .qb:hover{border-color:var(--accent);color:var(--accent)}
             .so:hover{border-color:var(--accent);color:var(--text)}
             .ocr-btn:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
-            .sheet{max-height:85vh}
+            .sheet{
+                max-height:80vh;top:50%;bottom:auto;left:50%;right:auto;
+                width:100%;border-radius:20px;
+                transform:translate(-50%,-50%) scale(.96);opacity:0;
+                transition:transform .3s cubic-bezier(.32,.72,0,1),opacity .2s;
+            }
+            .sheet.visible{transform:translate(-50%,-50%);opacity:1}
         }
     </style>
 </head>
