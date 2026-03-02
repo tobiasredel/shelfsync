@@ -201,6 +201,8 @@
         }
         .cal-btn:active{opacity:.85;transform:scale(.97)}
         .cal-btn.danger{background:var(--danger)}
+        .whisper-edit-btn{background:none;border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text-muted);cursor:pointer;font-size:.9rem;padding:.25rem .5rem;min-height:36px;min-width:36px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+        .whisper-edit-btn:hover{color:var(--text);border-color:var(--text-muted)}
         .cal-result{font-size:.8rem;color:var(--green);margin-top:.5rem;display:none}
         .cal-result.visible{display:block}
 
@@ -459,20 +461,25 @@
 
             <!-- Whisper-Sync -->
             <div class="cal-panel" id="calPanel">
-                <div class="sl" style="margin-bottom:.6rem">Whisper-Sync</div>
-                <p class="cal-hint" style="margin-bottom:.6rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Kosten: ~$0.02.</p>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+                    <div class="sl" style="margin-bottom:0">Whisper-Sync</div>
+                    <button class="whisper-edit-btn" id="whisperEditBtn" onclick="toggleWhisperConfig()" style="display:none" title="Konfiguration bearbeiten">&#9998;</button>
+                </div>
                 <div id="whisperStatus" style="margin-bottom:.6rem"></div>
-                <div class="cal-row" style="gap:.4rem;flex-wrap:wrap">
-                    <select class="cal-input" id="whisperLang" style="width:auto">
-                        <option value="de">Deutsch</option>
-                        <option value="en">English</option>
-                        <option value="fr">Français</option>
-                        <option value="es">Español</option>
-                    </select>
-                    <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
-                    <span class="cal-hint">Samples</span>
-                    <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
-                    <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
+                <div id="whisperConfig">
+                    <p class="cal-hint" style="margin-bottom:.6rem">Transkribiert kurze Audio-Segmente per Whisper und findet sie im EPUB-Text. Kosten: ~$0.02.</p>
+                    <div class="cal-row" style="gap:.4rem;flex-wrap:wrap">
+                        <select class="cal-input" id="whisperLang" style="width:auto">
+                            <option value="de">Deutsch</option>
+                            <option value="en">English</option>
+                            <option value="fr">Français</option>
+                            <option value="es">Español</option>
+                        </select>
+                        <input type="number" class="cal-input" id="whisperSamples" value="10" min="3" max="20" style="width:60px" title="Anzahl Samples">
+                        <span class="cal-hint">Samples</span>
+                        <button class="cal-btn" id="whisperStartBtn" onclick="startWhisperSync()">Auto-Sync starten</button>
+                        <button class="cal-btn danger" id="whisperDeleteBtn" onclick="deleteWhisperSync()" style="display:none">Löschen</button>
+                    </div>
                 </div>
                 <div id="whisperProgress" style="display:none;margin-top:.6rem">
                     <div style="display:flex;align-items:center;gap:.5rem">
@@ -934,10 +941,18 @@ function se(id,m){const e=$('#'+id);e.textContent=m;e.classList.add('visible')}
 function he(id){$('#'+id).classList.remove('visible')}
 
 // --- Whisper Auto-Sync ---
+function toggleWhisperConfig(){
+    const cfg=$('#whisperConfig');
+    const isHidden=cfg.style.display==='none';
+    cfg.style.display=isHidden?'':'none';
+    $('#whisperEditBtn').textContent=isHidden?'\u2716':'\u270E';
+    $('#whisperEditBtn').title=isHidden?'Konfiguration schließen':'Konfiguration bearbeiten';
+}
+
 async function loadWhisperStatus(){
     if(!sel)return;
     const stEl=$('#whisperStatus'),rb=$('#whisperResult'),db=$('#whisperDeleteBtn'),det=$('#whisperDetails');
-    const btn=$('#whisperStartBtn');
+    const btn=$('#whisperStartBtn'),cfg=$('#whisperConfig'),editBtn=$('#whisperEditBtn');
     stEl.innerHTML='';det.style.display='none';db.style.display='none';
     try{
         const r=await fetch('/api/chapter-mapping/'+sel.id);
@@ -945,9 +960,13 @@ async function loadWhisperStatus(){
         const d=await r.json();
         const wa=d.whisper_anchor_points||[];
         if(wa.length>0){
-            stEl.innerHTML='<span class="badge badge-green">Whisper-Sync: '+wa.length+' Ankerpunkte</span> <span class="cal-hint">(gespeichert)</span>';
+            stEl.innerHTML='<span class="badge badge-green">Whisper-Sync aktiv</span> <span class="cal-hint">'+wa.length+' Ankerpunkte</span>';
             db.style.display='';
             btn.textContent='Neu starten';
+            cfg.style.display='none';
+            editBtn.style.display='';
+            editBtn.textContent='\u270E';
+            editBtn.title='Konfiguration bearbeiten';
             let html='<div style="overflow-x:auto"><table style="width:100%;font-size:.78rem;border-collapse:collapse"><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:.2rem .4rem">Zeit</th><th style="text-align:left;padding:.2rem .4rem">Conf.</th><th style="text-align:left;padding:.2rem .4rem">Text</th></tr>';
             wa.forEach(a=>{
                 const min=Math.floor(a.audio_seconds/60),sec=Math.round(a.audio_seconds%60);
@@ -959,6 +978,8 @@ async function loadWhisperStatus(){
         }else{
             stEl.innerHTML='<span class="cal-hint">Noch kein Whisper-Sync durchgeführt.</span>';
             btn.textContent='Auto-Sync starten';
+            cfg.style.display='';
+            editBtn.style.display='none';
         }
     }catch(e){}
 }
